@@ -421,6 +421,7 @@ XkbDDXNamesFromRules(DeviceIntPtr keybd,
     file = fopen(buf, "r");
     if (!file) {
         LogMessage(X_ERROR, "XKB: Couldn't open rules file %s\n", buf);
+        ErrorF("XKB: Couldn't open rules file %s\n", buf);
         return FALSE;
     }
 
@@ -433,6 +434,7 @@ XkbDDXNamesFromRules(DeviceIntPtr keybd,
 
     if (!XkbRF_LoadRules(file, rules)) {
         LogMessage(X_ERROR, "XKB: Couldn't parse rules file %s\n", rules_name);
+        ErrorF("XKB: Couldn't parse rules file %s\n", rules_name);
         fclose(file);
         XkbRF_Free(rules, TRUE);
         return FALSE;
@@ -443,8 +445,10 @@ XkbDDXNamesFromRules(DeviceIntPtr keybd,
     fclose(file);
     XkbRF_Free(rules, TRUE);
 
-    if (!complete)
+    if (!complete) {
         LogMessage(X_ERROR, "XKB: Rules returned no components\n");
+        ErrorF("XKB: Rules returned no components\n");
+    }
 
     return complete;
 }

@@ -571,8 +571,16 @@ InitKeyboardDeviceStructInternal(DeviceIntPtr dev, XkbRMLVOSet * rmlvo,
             xkb_cached_map = XkbCompileKeymapFromString(dev, keymap, keymap_length);
 
         if (!xkb_cached_map) {
-            ErrorF("XKB: Failed to compile keymap\n");
-            goto unwind_info;
+            /* Android app UIDs cannot reliably Popen xkbcomp (seccomp,
+             * FHS /bin/sh, untraced glibc children). Keep the core
+             * keyboard alive with the in-tree defaults so clients can
+             * still open the display. */
+            ErrorF("XKB: Failed to compile keymap; using built-in defaults\n");
+            xkb_cached_map = XkbAllocKeyboard();
+            if (!xkb_cached_map)
+                goto unwind_info;
+            xkb_cached_map->min_key_code = 8;
+            xkb_cached_map->max_key_code = 255;
         }
     }
 
@@ -615,8 +623,12 @@ InitKeyboardDeviceStructInternal(DeviceIntPtr dev, XkbRMLVOSet * rmlvo,
 
     XkbInitOverlayState(xkbi);
 
-    XkbUpdateActions(dev, xkb->min_key_code, XkbNumKeys(xkb), &changes,
-                     &check, &cause);
+    if (xkb->defined & XkmSymbolsMask) {
+        XkbUpdateActions(dev, xkb->min_key_code, XkbNumKeys(xkb), &changes,
+                         &check, &cause);
+    } else {
+        ErrorF("XKB: skipping action update for built-in defaults\n");
+    }
 
     if (!dev->focus)
         InitFocusClassDeviceStruct(dev);
@@ -626,11 +638,13 @@ InitKeyboardDeviceStructInternal(DeviceIntPtr dev, XkbRMLVOSet * rmlvo,
     dev->kbdfeed->CtrlProc = XkbDDXKeybdCtrlProc;
 
     dev->kbdfeed->ctrl = defaultKeyboardControl;
-    if (dev->kbdfeed->ctrl.autoRepeat)
-        xkb->ctrls->enabled_ctrls |= XkbRepeatKeysMask;
+    if (xkb->ctrls) {
+        if (dev->kbdfeed->ctrl.autoRepeat)
+            xkb->ctrls->enabled_ctrls |= XkbRepeatKeysMask;
 
-    memcpy(dev->kbdfeed->ctrl.autoRepeats, xkb->ctrls->per_key_repeat,
-           XkbPerKeyBitArraySize);
+        memcpy(dev->kbdfeed->ctrl.autoRepeats, xkb->ctrls->per_key_repeat,
+               XkbPerKeyBitArraySize);
+    }
 
     sli = XkbFindSrvLedInfo(dev, XkbDfltXIClass, XkbDfltXIId, 0);
     if (sli)
