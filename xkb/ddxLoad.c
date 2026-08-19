@@ -60,6 +60,8 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 static unsigned
 LoadXKM(unsigned want, unsigned need, const char *keymap, XkbDescPtr *xkbRtrn);
+static unsigned
+LoadArdeskFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn);
 
 static void
 OutputDirectory(char *outdir, size_t size)
@@ -294,7 +296,7 @@ XkbDDXLoadKeymapFromString(DeviceIntPtr keybd,
     map_name = RunXkbComp(xkb_write_keymap_string_cb, &map);
     if (!map_name) {
         LogMessage(X_ERROR, "XKB: Couldn't compile keymap\n");
-        return 0;
+        return LoadArdeskFallbackXKM(want, need, xkbRtrn);
     }
 
     have = LoadXKM(want, need, map_name, xkbRtrn);
@@ -340,13 +342,13 @@ XkbDDXOpenConfigFile(const char *mapName, char *fileNameRtrn, int fileNameRtrnLe
 }
 
 static unsigned
-LoadXKM(unsigned want, unsigned need, const char *keymap, XkbDescPtr *xkbRtrn)
+LoadXKMFromPath(unsigned want, unsigned need, const char *fileName,
+                int unlink_after, XkbDescPtr *xkbRtrn)
 {
     FILE *file;
-    char fileName[PATH_MAX];
     unsigned missing;
 
-    file = XkbDDXOpenConfigFile(keymap, fileName, PATH_MAX);
+    file = fopen(fileName, "rb");
     if (file == NULL) {
         LogMessage(X_ERROR, "Couldn't open compiled keymap file %s\n",
                    fileName);
@@ -356,16 +358,58 @@ LoadXKM(unsigned want, unsigned need, const char *keymap, XkbDescPtr *xkbRtrn)
     if (*xkbRtrn == NULL) {
         LogMessage(X_ERROR, "Error loading keymap %s\n", fileName);
         fclose(file);
-        (void) unlink(fileName);
+        if (unlink_after)
+            (void) unlink(fileName);
         return 0;
     }
-    else {
-        DebugF("Loaded XKB keymap %s, defined=0x%x\n", fileName,
-               (*xkbRtrn)->defined);
+    DebugF("Loaded XKB keymap %s, defined=0x%x\n", fileName,
+           (*xkbRtrn)->defined);
+    fclose(file);
+    if (unlink_after)
+        (void) unlink(fileName);
+    return (need | want) & (~missing);
+}
+
+static unsigned
+LoadXKM(unsigned want, unsigned need, const char *keymap, XkbDescPtr *xkbRtrn)
+{
+    char fileName[PATH_MAX];
+    FILE *file;
+
+    file = XkbDDXOpenConfigFile(keymap, fileName, PATH_MAX);
+    if (file == NULL) {
+        LogMessage(X_ERROR, "Couldn't open compiled keymap file %s\n",
+                   fileName);
+        return 0;
     }
     fclose(file);
-    (void) unlink(fileName);
-    return (need | want) & (~missing);
+    return LoadXKMFromPath(want, need, fileName, TRUE, xkbRtrn);
+}
+
+static unsigned
+LoadArdeskFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn)
+{
+    const char *env;
+    char path[PATH_MAX];
+
+    env = getenv("ARDESK_XKM");
+    if (env && env[0]) {
+        unsigned have = LoadXKMFromPath(want, need, env, FALSE, xkbRtrn);
+        if (have) {
+            ErrorF("XKB: Loaded fallback keymap %s\n", env);
+            return have;
+        }
+    }
+    if (XkbBaseDirectory &&
+        snprintf(path, sizeof(path), "%s/compiled/ardesk-default.xkm",
+                 XkbBaseDirectory) < (int) sizeof(path)) {
+        unsigned have = LoadXKMFromPath(want, need, path, FALSE, xkbRtrn);
+        if (have) {
+            ErrorF("XKB: Loaded fallback keymap %s\n", path);
+            return have;
+        }
+    }
+    return 0;
 }
 
 unsigned
@@ -393,7 +437,7 @@ XkbDDXLoadKeymapByNames(DeviceIntPtr keybd,
     else if (!XkbDDXCompileKeymapByNames(xkb, names, want, need,
                                          nameRtrn, nameRtrnLen)) {
         LogMessage(X_ERROR, "XKB: Couldn't compile keymap\n");
-        return 0;
+        return LoadArdeskFallbackXKM(want, need, xkbRtrn);
     }
 
     return LoadXKM(want, need, nameRtrn, xkbRtrn);

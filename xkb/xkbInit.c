@@ -570,6 +570,12 @@ InitKeyboardDeviceStructInternal(DeviceIntPtr dev, XkbRMLVOSet * rmlvo,
         else
             xkb_cached_map = XkbCompileKeymapFromString(dev, keymap, keymap_length);
 
+        if (xkb_cached_map)
+            ErrorF("XKB: compiled map defined=0x%x keys=%d..%d\n",
+                   xkb_cached_map->defined,
+                   xkb_cached_map->min_key_code,
+                   xkb_cached_map->max_key_code);
+
         if (!xkb_cached_map) {
             /* Android app UIDs cannot reliably Popen xkbcomp (seccomp,
              * FHS /bin/sh, untraced glibc children). Keep the core
@@ -616,11 +622,8 @@ InitKeyboardDeviceStructInternal(DeviceIntPtr dev, XkbRMLVOSet * rmlvo,
     XkbInitSemantics(xkb);
     XkbInitNames(xkbi);
     XkbInitRadioGroups(xkbi);
-
     XkbInitControls(dev, xkbi);
-
     XkbInitIndicatorMap(xkbi);
-
     XkbInitOverlayState(xkbi);
 
     if (xkb->defined & XkmSymbolsMask) {
