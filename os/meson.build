@@ -22,6 +22,10 @@ srcs_os = [
     'log.c',
 ]
 
+if host_machine.system() == 'android'
+    srcs_os += 'android-sigsys.c'
+endif
+
 # Wrapper code for missing C library functions. Note that conf_data contains either '1' or false.
 srcs_libc = []
 if conf_data.get('HAVE_REALLOCARRAY').to_int() == 0

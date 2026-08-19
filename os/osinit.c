@@ -67,6 +67,10 @@ SOFTWARE.
 
 #include "dixstruct.h"
 
+#ifdef __ANDROID__
+void android_install_sigsys_handler(void);
+#endif
+
 #if !defined(SYSV) && !defined(WIN32)
 #include <sys/resource.h>
 #endif
@@ -176,7 +180,10 @@ OsInit(void)
 
         int siglist[] = { SIGSEGV, SIGQUIT, SIGILL, SIGFPE, SIGBUS,
             SIGABRT,
+#ifndef __ANDROID__
+            /* Zygote RET_TRAPs some syscalls; android-sigsys.c handles SIGSYS. */
             SIGSYS,
+#endif
             SIGXCPU,
             SIGXFSZ,
 #ifdef SIGEMT
@@ -198,6 +205,9 @@ OsInit(void)
                        siglist[i], strerror(errno));
             }
         }
+#ifdef __ANDROID__
+        android_install_sigsys_handler();
+#endif
 #endif /* !WIN32 || __CYGWIN__ */
         busfault_init();
         server_poll = ospoll_create();
