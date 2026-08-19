@@ -1161,8 +1161,10 @@ keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
     XkbDescPtr xkb;
     XkbChangesRec changes = { 0 };
 
-    if (xwl_screen->nokeymap)
+    if (xwl_screen->nokeymap) {
+        close(fd);
         return;
+    }
 
     if (xwl_seat->keymap)
         munmap(xwl_seat->keymap, xwl_seat->keymap_size);

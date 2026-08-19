@@ -683,6 +683,10 @@ EstablishNewConnections(int curconn, int ready, void *data)
         return;
 
     newconn = _XSERVTransGetConnectionNumber(new_trans_conn);
+    /* Zygote SIGSYS on accept(2) can return the listen fd itself. Closing
+     * that "client" destroys the X11 listener. */
+    if (newconn == curconn)
+        return;
 
     _XSERVTransSetOption(new_trans_conn, TRANS_NONBLOCKING, 1);
 
