@@ -856,8 +856,7 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
 {
     static const char allow_commits[] = "_XWAYLAND_ALLOW_COMMITS";
     struct xwl_screen *xwl_screen;
-    Pixel red_mask, blue_mask, green_mask;
-    int ret, bpc, green_bpc, i;
+    int ret, i;
     unsigned int xwl_width = 640;
     unsigned int xwl_height = 480;
     Bool use_fixed_size = FALSE;
@@ -1006,7 +1005,10 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
     xorg_list_init(&xwl_screen->queued_drm_lease_devices);
     xorg_list_init(&xwl_screen->drm_leases);
     xorg_list_init(&xwl_screen->pending_wl_surface_destroy);
-    xwl_screen->depth = 24;
+    /* Same screen model as BionicX PixmapManager: one displayable
+     * 32-bit TrueColor visual. Depth 24 is a pixmap format on the
+     * same 32-bit buffer, not a second TrueColor visual. */
+    xwl_screen->depth = 32;
     xwl_screen->global_surface_scale = 1;
 
     if (!monitorResolution)
@@ -1052,17 +1054,8 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
         return FALSE;
     }
 
-    bpc = xwl_screen->depth / 3;
-    green_bpc = xwl_screen->depth - 2 * bpc;
-    blue_mask = (1 << bpc) - 1;
-    green_mask = ((1 << green_bpc) - 1) << bpc;
-    red_mask = blue_mask << (green_bpc + bpc);
-
-    miSetVisualTypesAndMasks(xwl_screen->depth,
-                             ((1 << TrueColor) | (1 << DirectColor)),
-                             green_bpc, TrueColor,
-                             red_mask, green_mask, blue_mask);
-
+    miSetVisualTypesAndMasks(32, (1 << TrueColor), 8, TrueColor,
+                             0xff0000, 0x00ff00, 0x0000ff);
     miSetPixmapDepths();
 
     ret = fbScreenInit(pScreen, NULL,
@@ -1072,6 +1065,9 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
                        BitsPerPixel(xwl_screen->depth));
     if (!ret)
         return FALSE;
+
+    ErrorF("Xwayland root depth=%d defaultVisual=0x%lx\n",
+           pScreen->rootDepth, (unsigned long)pScreen->rootVisual);
 
     fbPictureInit(pScreen, 0, 0);
 
