@@ -22,6 +22,8 @@ srcs = [
     'xwayland-cvt.h',
     'xwayland-vidmode.c',
     'xwayland-vidmode.h',
+    'xwayland-glx-stub.c',
+    'xwayland-glx-stub.h',
     'xwayland-window.c',
     'xwayland-window.h',
     'xwayland-window-buffers.c',
