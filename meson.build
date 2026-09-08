@@ -360,6 +360,8 @@ endif
 
 build_dpms = get_option('dpms')
 
+build_tawc = get_option('tawc')
+
 build_xf86bigfont = get_option('xf86bigfont')
 build_screensaver = get_option('screensaver')
 build_res = get_option('xres')

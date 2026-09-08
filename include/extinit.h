@@ -158,6 +158,10 @@ extern void XvMCExtensionInit(void);
 extern void dri3_extension_init(void);
 #endif
 
+#ifdef TAWC
+extern void tawc_dri_extension_init(void);
+#endif
+
 #if defined(PRESENT)
 #include "presentext.h"
 #endif

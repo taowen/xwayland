@@ -44,6 +44,10 @@
 #include <libdecor.h>
 #endif
 
+#ifdef TAWC
+struct android_wlegl;
+#endif
+
 struct xwl_screen {
     double width;
     double height;
@@ -149,6 +153,12 @@ struct xwl_screen {
     const char *output_name;
 
     uint32_t present_capabilities;
+
+#ifdef TAWC
+    /* android_wlegl global, used to ship AHB-backed buffers from this
+     * X server to the compositor. See hw/xwayland/xwayland-tawc.c. */
+    struct android_wlegl *tawc_wlegl;
+#endif
 };
 
 /* Apps which use randr/vidmode to change the mode when going fullscreen,

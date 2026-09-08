@@ -43,6 +43,8 @@
 #include "xwayland-types.h"
 #include "xwayland-dmabuf.h"
 
+struct xwl_tawc_buffer;
+
 struct xwl_wl_surface {
     OsTimerPtr wl_surface_destroy_timer;
     struct wl_surface *wl_surface;
@@ -106,6 +108,16 @@ struct xwl_window {
     struct wp_fractional_scale_v1 *fractional_scale;
     int fractional_scale_numerator;
     struct wp_linux_drm_syncobj_surface_v1 *surface_sync;
+
+    /* TAWC-DRI frame pacing (hw/xwayland/xwayland-tawc.c): commits are
+     * throttled to the compositor's wl_surface.frame cadence. While a
+     * callback is outstanding, presents queue FIFO here; one is
+     * committed per callback. All NULL/0 unless the window receives
+     * TAWC-DRI presents; torn down in xwl_window_dispose. */
+    struct wl_callback *tawc_frame_callback;
+    struct xwl_tawc_buffer *tawc_queue_head;
+    struct xwl_tawc_buffer *tawc_queue_tail;
+    int tawc_queue_len;
 };
 
 struct xwl_window *xwl_window_get(WindowPtr window);

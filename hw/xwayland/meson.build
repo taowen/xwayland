@@ -129,6 +129,15 @@ if build_xwayland_glamor
     xwayland_glamor += glamor
 endif
 
+if build_tawc
+    srcs += [
+        'xwayland-tawc.c',
+        'xwayland-tawc.h',
+    ]
+    srcs += client_header.process('android_wlegl.xml')
+    srcs += code.process('android_wlegl.xml')
+endif
+
 wayland_inc = [ inc, ]
 if build_glx
     wayland_inc += glx_inc

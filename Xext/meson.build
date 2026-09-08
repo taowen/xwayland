@@ -62,6 +62,11 @@ if build_xv
     hdrs_xext += ['xvdix.h', 'xvmcext.h']
 endif
 
+if build_tawc
+    srcs_xext += 'tawc-dri.c'
+    hdrs_xext += 'tawcdriproto.h'
+endif
+
 libxserver_xext = static_library('libxserver_xext',
     srcs_xext,
     include_directories: inc,

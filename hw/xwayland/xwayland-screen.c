@@ -71,6 +71,11 @@
 #include "tearing-control-v1-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
 
+#ifdef TAWC
+#include "android_wlegl-client-protocol.h"
+#include "xwayland-tawc.h"
+#endif
+
 static DevPrivateKeyRec xwl_screen_private_key;
 static DevPrivateKeyRec xwl_client_private_key;
 
@@ -538,6 +543,16 @@ registry_global(void *data, struct wl_registry *registry, uint32_t id,
         xwl_screen->fractional_scale_manager =
             wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
     }
+#ifdef TAWC
+    else if (strcmp(interface, android_wlegl_interface.name) == 0) {
+        /* Bind v2: matches the compositor's advertised version. We only
+         * use v1 requests (create_handle / create_buffer); v2 adds
+         * get_server_buffer_handle, which the compositor rejects. */
+        uint32_t v = version < 2 ? version : 2;
+        xwl_screen->tawc_wlegl =
+            wl_registry_bind(registry, id, &android_wlegl_interface, v);
+    }
+#endif
 #ifdef XWL_HAS_GLAMOR
     else if (xwl_screen->glamor) {
         xwl_glamor_init_wl_registry(xwl_screen, registry, id, interface,
@@ -1027,7 +1042,6 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
     wl_registry_add_listener(xwl_screen->registry,
                              &registry_listener, xwl_screen);
     xwl_screen_roundtrip(xwl_screen);
-
 
     if (xwl_screen->fullscreen && xwl_screen->rootless) {
         ErrorF("error, cannot set fullscreen when running rootless\n");
