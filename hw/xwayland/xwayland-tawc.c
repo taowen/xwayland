@@ -14,7 +14,7 @@
 #include "xwayland-screen.h"
 #include "xwayland-window.h"
 #include "xwayland-tawc.h"
-#include "android_wlegl-client-protocol.h"
+#include "wayland-android-client-protocol.h"
 
 #define TAWC_MAX_QUEUED 8
 extern void tawc_dri_send_buffer_release(uint32_t window, uint32_t client, uint32_t serial);

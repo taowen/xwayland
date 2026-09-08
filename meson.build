@@ -424,6 +424,11 @@ common_dep = [
     xfont2_dep,
     xdmcp_dep,
 ]
+if build_tawc
+    ardesk_wsi_protocols = dependency('ardesk-wsi-protocols', version: '>=0.3')
+    common_dep += ardesk_wsi_protocols
+endif
+
 
 inc = include_directories(
     '.',

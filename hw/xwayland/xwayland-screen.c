@@ -72,7 +72,7 @@
 #include "fractional-scale-v1-client-protocol.h"
 
 #ifdef TAWC
-#include "android_wlegl-client-protocol.h"
+#include "wayland-android-client-protocol.h"
 #include "xwayland-tawc.h"
 #endif
 

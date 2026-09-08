@@ -97,7 +97,7 @@ tawc_dri_send_configure_notify_to(tawc_dri_event_rec *event,
                                   int width, int height)
 {
     xTAWCDRIConfigureNotify cn = {
-        .type = GenericEvent,
+        .response_type = GenericEvent,
         .extension = tawc_dri_request,
         .length = 0,
         .evtype = TAWCDRIEventConfigureNotify,
@@ -172,7 +172,7 @@ tawc_dri_send_buffer_release(uint32_t window_id, uint32_t client_mask,
             (uint32_t)event->client->clientAsMask == client_mask &&
             (event->mask & TAWCDRIBufferReleaseMask)) {
             xTAWCDRIBufferRelease br = {
-                .type = GenericEvent,
+                .response_type = GenericEvent,
                 .extension = tawc_dri_request,
                 .length = 0,
                 .evtype = TAWCDRIEventBufferRelease,
@@ -220,17 +220,17 @@ ProcTAWCDRIQueryVersion(ClientPtr client)
     REQUEST_SIZE_MATCH(xTAWCDRIQueryVersionReq);
 
     rep = (xTAWCDRIQueryVersionReply) {
-        .type = X_Reply,
-        .sequenceNumber = client->sequence,
+        .response_type = X_Reply,
+        .sequence = client->sequence,
         .length = 0,
-        .majorVersion = TAWCDRI_MAJOR,
-        .minorVersion = TAWCDRI_MINOR,
+        .major_version = TAWCDRI_MAJOR,
+        .minor_version = TAWCDRI_MINOR,
     };
     if (client->swapped) {
-        swaps(&rep.sequenceNumber);
+        swaps(&rep.sequence);
         swapl(&rep.length);
-        swapl(&rep.majorVersion);
-        swapl(&rep.minorVersion);
+        swapl(&rep.major_version);
+        swapl(&rep.minor_version);
     }
     WriteToClient(client, sizeof(rep), &rep);
     return Success;
@@ -252,12 +252,12 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
     if (client->req_len < (sz_xTAWCDRIPresentBufferReq >> 2))
         return BadLength;
 
-    num_fds  = stuff->numFds;
-    num_ints = stuff->numInts;
+    num_fds  = stuff->num_fds;
+    num_ints = stuff->num_ints;
 
     /* Reasonable caps so a malformed client can't OOM us. AOSP gralloc4
-     * private_handle_t maxes at numFds=2 (gralloc fd + sync fd) and
-     * numInts ~ 32 in practice; 16/256 is a generous upper bound. */
+     * private_handle_t maxes at num_fds=2 (gralloc fd + sync fd) and
+     * num_ints ~ 32 in practice; 16/256 is a generous upper bound. */
     if (num_fds < 0 || num_fds > 16 || num_ints < 0 || num_ints > 256) {
         client->errorValue = num_fds;
         return BadValue;
@@ -321,7 +321,7 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
         }
     }
 
-    usage = ((uint64_t)stuff->usageHi << 32) | (uint64_t)stuff->usageLo;
+    usage = ((uint64_t)stuff->usage_hi << 32) | (uint64_t)stuff->usage_lo;
 
     rc = xwl_tawc_present_native_handle(window, fds, num_fds,
                                         ints_buf, num_ints,
@@ -349,8 +349,8 @@ ProcTAWCDRISelectInput(ClientPtr client)
 
     REQUEST_SIZE_MATCH(xTAWCDRISelectInputReq);
 
-    if (stuff->eventMask & ~TAWCDRIAllEventMasks) {
-        client->errorValue = stuff->eventMask;
+    if (stuff->event_mask & ~TAWCDRIAllEventMasks) {
+        client->errorValue = stuff->event_mask;
         return BadValue;
     }
 
@@ -365,9 +365,9 @@ ProcTAWCDRISelectInput(ClientPtr client)
     if (rc == Success) {
         if (event->window != window || event->client != client)
             return BadMatch;
-        if (stuff->eventMask) {
-            event->mask = stuff->eventMask;
-            if (stuff->eventMask & TAWCDRIConfigureNotifyMask)
+        if (stuff->event_mask) {
+            event->mask = stuff->event_mask;
+            if (stuff->event_mask & TAWCDRIConfigureNotifyMask)
                 tawc_dri_send_configure_notify_to(event,
                                                   window->drawable.width,
                                                   window->drawable.height);
@@ -379,7 +379,7 @@ ProcTAWCDRISelectInput(ClientPtr client)
     if (rc != BadValue)
         return rc;
 
-    if (stuff->eventMask == 0)
+    if (stuff->event_mask == 0)
         return Success;
 
     LEGAL_NEW_RESOURCE(stuff->eid, client);
@@ -390,7 +390,7 @@ ProcTAWCDRISelectInput(ClientPtr client)
     event->client = client;
     event->window = window;
     event->eid = stuff->eid;
-    event->mask = stuff->eventMask;
+    event->mask = stuff->event_mask;
     event->next = tawc_dri_event_list;
     tawc_dri_event_list = event;
 
@@ -423,7 +423,7 @@ ProcTAWCDRISelectInput(ClientPtr client)
      * otherwise be missed forever (this exact race is how eglx11-test
      * accidentally survived the black-window bug while es2gears_x11
      * didn't). */
-    if (stuff->eventMask & TAWCDRIConfigureNotifyMask)
+    if (stuff->event_mask & TAWCDRIConfigureNotifyMask)
         tawc_dri_send_configure_notify_to(event,
                                           window->drawable.width,
                                           window->drawable.height);
@@ -453,8 +453,8 @@ SProcTAWCDRIQueryVersion(ClientPtr client)
     REQUEST(xTAWCDRIQueryVersionReq);
     swaps(&stuff->length);
     REQUEST_SIZE_MATCH(xTAWCDRIQueryVersionReq);
-    swapl(&stuff->majorVersion);
-    swapl(&stuff->minorVersion);
+    swapl(&stuff->major_version);
+    swapl(&stuff->minor_version);
     return ProcTAWCDRIQueryVersion(client);
 }
 
@@ -466,14 +466,14 @@ SProcTAWCDRIPresentBuffer(ClientPtr client)
     if (client->req_len < (sz_xTAWCDRIPresentBufferReq >> 2))
         return BadLength;
     swapl(&stuff->window);
-    swaps(&stuff->numFds);
-    swaps(&stuff->numInts);
+    swaps(&stuff->num_fds);
+    swaps(&stuff->num_ints);
     swapl(&stuff->width);
     swapl(&stuff->height);
     swapl(&stuff->stride);
     swapl(&stuff->format);
-    swapl(&stuff->usageLo);
-    swapl(&stuff->usageHi);
+    swapl(&stuff->usage_lo);
+    swapl(&stuff->usage_hi);
     swapl(&stuff->serial);
     return ProcTAWCDRIPresentBuffer(client);
 }
@@ -486,7 +486,7 @@ SProcTAWCDRISelectInput(ClientPtr client)
     REQUEST_SIZE_MATCH(xTAWCDRISelectInputReq);
     swapl(&stuff->eid);
     swapl(&stuff->window);
-    swapl(&stuff->eventMask);
+    swapl(&stuff->event_mask);
     return ProcTAWCDRISelectInput(client);
 }
 
