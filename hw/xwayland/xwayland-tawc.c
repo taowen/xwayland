@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <wayland-client.h>
 #include <X11/X.h>
+#include <ardesk/tawc-dri.h>
 #include "os.h"
 #include "windowstr.h"
 #include "xwayland-screen.h"
@@ -23,6 +24,7 @@ static void
 buffer_destroy(struct xwl_tawc_buffer *buffer)
 {
     if (buffer->buffer) wl_buffer_destroy(buffer->buffer);
+    if (buffer->opaque_region) wl_region_destroy(buffer->opaque_region);
     free(buffer);
 }
 
@@ -42,6 +44,9 @@ static const struct wl_callback_listener frame_listener = { .done = frame_done }
 static void
 commit(struct xwl_window *window, struct xwl_tawc_buffer *buffer)
 {
+    /* Apply this entry's mode at commit, not enqueue: queued clients can switch
+     * between opaque and premultiplied buffers on the same surface. */
+    wl_surface_set_opaque_region(window->surface, buffer->opaque_region);
     wl_surface_attach(window->surface, buffer->buffer, 0, 0);
     wl_surface_damage(window->surface, 0, 0, buffer->width, buffer->height);
     window->tawc_frame_callback = wl_surface_frame(window->surface);
@@ -89,7 +94,7 @@ xwl_tawc_window_teardown(struct xwl_window *window)
 int
 xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
     const int32_t *ints, int num_ints, int width, int height, int stride,
-    int format, uint64_t usage, uint32_t client_mask, uint32_t serial)
+    int format, uint64_t usage, uint32_t client_mask, uint32_t serial, uint32_t flags)
 {
     int result = BadMatch;
     struct xwl_tawc_buffer *buffer = NULL;
@@ -104,6 +109,11 @@ xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
     if (xwl->tawc_queue_len >= TAWC_MAX_QUEUED) goto done;
     buffer = calloc(1, sizeof(*buffer));
     if (!buffer) goto done;
+    if (flags & TAWC_DRI_PRESENT_OPAQUE) {
+        buffer->opaque_region = wl_compositor_create_region(screen->compositor);
+        if (!buffer->opaque_region) goto done;
+        wl_region_add(buffer->opaque_region, 0, 0, width, height);
+    }
     struct wl_array values = {
         .size = (size_t)num_ints * sizeof(int32_t), .data = (void *)ints,
     };

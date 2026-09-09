@@ -4,9 +4,11 @@
 #include <stdint.h>
 #include "window.h"
 struct wl_buffer;
+struct wl_region;
 struct xwl_window;
 struct xwl_tawc_buffer {
     struct wl_buffer *buffer;
+    struct wl_region *opaque_region;
     int width, height;
     uint32_t window_id, client_mask, serial;
     struct xwl_tawc_buffer *queue_next;
@@ -14,6 +16,6 @@ struct xwl_tawc_buffer {
 /* Forward native handles; only the compositor imports them into gralloc. */
 int xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
     const int32_t *ints, int num_ints, int width, int height, int stride,
-    int format, uint64_t usage, uint32_t client_mask, uint32_t serial);
+    int format, uint64_t usage, uint32_t client_mask, uint32_t serial, uint32_t flags);
 void xwl_tawc_window_teardown(struct xwl_window *window);
 #endif

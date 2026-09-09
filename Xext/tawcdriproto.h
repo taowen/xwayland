@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * TAWC-DRI 0.3: native handle FDs/ints over X11, forwarded to android_wlegl.
+ * TAWC-DRI 0.4: native handle FDs/ints over X11, forwarded to android_wlegl.
  * The compositor imports the AHB. Xwayland relays resize/release XGE events.
  */
 
@@ -18,6 +18,7 @@
 #define X_TAWCDRIQueryVersion X_TAWCDRI_QueryVersion
 #define X_TAWCDRIPresentBuffer X_TAWCDRI_PresentBuffer
 #define X_TAWCDRISelectInput X_TAWCDRI_SelectInput
+#define X_TAWCDRIPresentBuffer2 X_TAWCDRI_PresentBuffer2
 
 /* XGE generic events (response_type 35), not core events. */
 #define TAWCDRINumberErrors 0
@@ -37,6 +38,8 @@ typedef tawc_dri_query_version_reply xTAWCDRIQueryVersionReply;
 #define sz_xTAWCDRIQueryVersionReply 32
 typedef tawc_dri_present_buffer_req xTAWCDRIPresentBufferReq;
 #define sz_xTAWCDRIPresentBufferReq 40
+typedef tawc_dri_present_buffer2_req xTAWCDRIPresentBuffer2Req;
+#define sz_xTAWCDRIPresentBuffer2Req 44
 typedef tawc_dri_select_input_req xTAWCDRISelectInputReq;
 #define sz_xTAWCDRISelectInputReq 16
 typedef tawc_dri_configure_notify_event xTAWCDRIConfigureNotify;

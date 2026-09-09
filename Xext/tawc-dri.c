@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * TAWC-DRI 0.3: forward native handles from X11 clients to android_wlegl.
+ * TAWC-DRI 0.4: forward native handles from X11 clients to android_wlegl.
  * The compositor imports buffers and signals release. XGE events report
  * resize and release to each client's selected XCB event queue.
  */
@@ -37,7 +37,7 @@ extern int xwl_tawc_present_native_handle(WindowPtr window,
                                           int width, int height, int stride,
                                           int format, uint64_t usage,
                                           uint32_t client_mask,
-                                          uint32_t serial);
+                                          uint32_t serial, uint32_t flags);
 
 /* ── Event selections ──
  *
@@ -247,9 +247,11 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
     uint64_t usage;
     int num_fds, num_ints;
     size_t total, ints_sz, ints_offset;
-    uint32_t serial;
+    uint32_t serial, flags = 0;
+    const size_t header_size = stuff->minor_opcode == X_TAWCDRIPresentBuffer2 ?
+        sz_xTAWCDRIPresentBuffer2Req : sz_xTAWCDRIPresentBufferReq;
 
-    if (client->req_len < (sz_xTAWCDRIPresentBufferReq >> 2))
+    if (client->req_len < (header_size >> 2))
         return BadLength;
 
     num_fds  = stuff->num_fds;
@@ -265,9 +267,16 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
 
     total   = (size_t)stuff->length * 4;
     ints_sz = (size_t)num_ints * sizeof(int32_t);
-    if (total != sz_xTAWCDRIPresentBufferReq + ints_sz)
+    if (total != header_size + ints_sz)
         return BadLength;
-    ints_offset = sz_xTAWCDRIPresentBufferReq;
+    ints_offset = header_size;
+    if (stuff->minor_opcode == X_TAWCDRIPresentBuffer2) {
+        flags = ((xTAWCDRIPresentBuffer2Req *)stuff)->flags;
+        if (flags & ~TAWC_DRI_PRESENT_OPAQUE) {
+            client->errorValue = flags;
+            return BadValue;
+        }
+    }
     serial = stuff->serial;
 
     /* DIX requires every dispatch that pulls fds to declare the count up
@@ -331,7 +340,7 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
                                         (int)stuff->format,
                                         usage,
                                         (uint32_t)client->clientAsMask,
-                                        serial);
+                                        serial, flags);
     /* xwl_tawc_present_native_handle owns + closes the fds on both
      * success (duplicated by Wayland) and failure (closed during cleanup). */
     free(fds);
@@ -439,6 +448,7 @@ ProcTAWCDRIDispatch(ClientPtr client)
     case X_TAWCDRIQueryVersion:
         return ProcTAWCDRIQueryVersion(client);
     case X_TAWCDRIPresentBuffer:
+    case X_TAWCDRIPresentBuffer2:
         return ProcTAWCDRIPresentBuffer(client);
     case X_TAWCDRISelectInput:
         return ProcTAWCDRISelectInput(client);
@@ -475,6 +485,12 @@ SProcTAWCDRIPresentBuffer(ClientPtr client)
     swapl(&stuff->usage_lo);
     swapl(&stuff->usage_hi);
     swapl(&stuff->serial);
+    if (stuff->minor_opcode == X_TAWCDRIPresentBuffer2) {
+        if (client->req_len < (sz_xTAWCDRIPresentBuffer2Req >> 2))
+            return BadLength;
+        xTAWCDRIPresentBuffer2Req *extended = (void *)stuff;
+        swapl(&extended->flags);
+    }
     return ProcTAWCDRIPresentBuffer(client);
 }
 
@@ -498,6 +514,7 @@ SProcTAWCDRIDispatch(ClientPtr client)
     case X_TAWCDRIQueryVersion:
         return SProcTAWCDRIQueryVersion(client);
     case X_TAWCDRIPresentBuffer:
+    case X_TAWCDRIPresentBuffer2:
         return SProcTAWCDRIPresentBuffer(client);
     case X_TAWCDRISelectInput:
         return SProcTAWCDRISelectInput(client);
