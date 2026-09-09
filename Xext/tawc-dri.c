@@ -270,6 +270,11 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
     if (total != header_size + ints_sz)
         return BadLength;
     ints_offset = header_size;
+
+    /* Register the descriptors before validating composition flags as well:
+     * DIX must discard this request's FDs on an error, rather than leaving them
+     * queued for the next native handle on this connection. */
+    SetReqFds(client, num_fds);
     if (stuff->minor_opcode == X_TAWCDRIPresentBuffer2) {
         flags = ((xTAWCDRIPresentBuffer2Req *)stuff)->flags;
         if (flags & ~TAWC_DRI_PRESENT_OPAQUE) {
@@ -278,12 +283,6 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
         }
     }
     serial = stuff->serial;
-
-    /* DIX requires every dispatch that pulls fds to declare the count up
-     * front; otherwise libxtrans drops the SCM_RIGHTS-attached fds and
-     * ReadFdFromClient returns -1. Same shape as DRI3's
-     * proc_dri3_pixmap_from_buffers. */
-    SetReqFds(client, num_fds);
 
     rc = dixLookupWindow(&window, stuff->window, client, DixWriteAccess);
     if (rc != Success)
