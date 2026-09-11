@@ -138,6 +138,8 @@ conf_data.set('HAVE_CBRT', cc.has_function('cbrt') ? '1' : false)
 conf_data.set('HAVE_EPOLL_CREATE1', cc.has_function('epoll_create1') ? '1' : false)
 conf_data.set('HAVE_GETUID', cc.has_function('getuid') ? '1' : false)
 conf_data.set('HAVE_GETEUID', cc.has_function('geteuid') ? '1' : false)
+# PrivsElevated must read saved IDs when available instead of probing seteuid(0).
+conf_data.set('HAVE_GETRESUID', cc.has_function('getresuid') and cc.has_function('getresgid') ? '1' : false)
 conf_data.set('HAVE_ISASTREAM', cc.has_function('isastream') ? '1' : false)
 conf_data.set('HAVE_ISSETUGID', cc.has_function('issetugid') ? '1' : false)
 conf_data.set('HAVE_GETIFADDRS', cc.has_function('getifaddrs') ? '1' : false)
