@@ -62,7 +62,7 @@ log_sigsys(long nr, uint64_t pc)
 {
     char buf[96];
     int n = 0;
-    const char *p = "ArdeskXwl SIGSYS nr=";
+    const char *p = "ArlinuxXwl SIGSYS nr=";
     unsigned long v;
 
     while (*p && n < (int)sizeof(buf) - 1)

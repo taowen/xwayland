@@ -425,8 +425,8 @@ common_dep = [
     xdmcp_dep,
 ]
 if build_tawc
-    ardesk_wsi_protocols = dependency('ardesk-wsi-protocols', version: '>=0.3')
-    common_dep += ardesk_wsi_protocols
+    arlinux_wsi_protocols = dependency('arlinux-wsi-protocols', version: '>=0.3')
+    common_dep += arlinux_wsi_protocols
 endif
 
 

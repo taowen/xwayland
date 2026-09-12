@@ -61,7 +61,7 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 static unsigned
 LoadXKM(unsigned want, unsigned need, const char *keymap, XkbDescPtr *xkbRtrn);
 static unsigned
-LoadArdeskFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn);
+LoadArlinuxFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn);
 
 static void
 OutputDirectory(char *outdir, size_t size)
@@ -296,7 +296,7 @@ XkbDDXLoadKeymapFromString(DeviceIntPtr keybd,
     map_name = RunXkbComp(xkb_write_keymap_string_cb, &map);
     if (!map_name) {
         LogMessage(X_ERROR, "XKB: Couldn't compile keymap\n");
-        return LoadArdeskFallbackXKM(want, need, xkbRtrn);
+        return LoadArlinuxFallbackXKM(want, need, xkbRtrn);
     }
 
     have = LoadXKM(want, need, map_name, xkbRtrn);
@@ -387,12 +387,12 @@ LoadXKM(unsigned want, unsigned need, const char *keymap, XkbDescPtr *xkbRtrn)
 }
 
 static unsigned
-LoadArdeskFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn)
+LoadArlinuxFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn)
 {
     const char *env;
     char path[PATH_MAX];
 
-    env = getenv("ARDESK_XKM");
+    env = getenv("ARLINUX_XKM");
     if (env && env[0]) {
         unsigned have = LoadXKMFromPath(want, need, env, FALSE, xkbRtrn);
         if (have) {
@@ -401,7 +401,7 @@ LoadArdeskFallbackXKM(unsigned want, unsigned need, XkbDescPtr *xkbRtrn)
         }
     }
     if (XkbBaseDirectory &&
-        snprintf(path, sizeof(path), "%s/compiled/ardesk-default.xkm",
+        snprintf(path, sizeof(path), "%s/compiled/arlinux-default.xkm",
                  XkbBaseDirectory) < (int) sizeof(path)) {
         unsigned have = LoadXKMFromPath(want, need, path, FALSE, xkbRtrn);
         if (have) {
@@ -437,7 +437,7 @@ XkbDDXLoadKeymapByNames(DeviceIntPtr keybd,
     else if (!XkbDDXCompileKeymapByNames(xkb, names, want, need,
                                          nameRtrn, nameRtrnLen)) {
         LogMessage(X_ERROR, "XKB: Couldn't compile keymap\n");
-        return LoadArdeskFallbackXKM(want, need, xkbRtrn);
+        return LoadArlinuxFallbackXKM(want, need, xkbRtrn);
     }
 
     return LoadXKM(want, need, nameRtrn, xkbRtrn);

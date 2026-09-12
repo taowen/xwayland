@@ -9,7 +9,7 @@
 #include <X11/X.h>
 #include <X11/Xmd.h>
 #include <X11/Xproto.h>
-#include <ardesk/tawc-dri.h>
+#include <arlinux/tawc-dri.h>
 
 #define TAWCDRI_NAME TAWC_DRI_NAME
 #define TAWCDRI_MAJOR TAWC_DRI_MAJOR

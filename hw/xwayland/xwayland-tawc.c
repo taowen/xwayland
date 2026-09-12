@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <wayland-client.h>
 #include <X11/X.h>
-#include <ardesk/tawc-dri.h>
+#include <arlinux/tawc-dri.h>
 #include "os.h"
 #include "windowstr.h"
 #include "xwayland-screen.h"

@@ -134,7 +134,7 @@ if build_tawc
         'xwayland-tawc.c',
         'xwayland-tawc.h',
     ]
-    android_xml = ardesk_wsi_protocols.get_variable('pkgdatadir') / 'wayland-android.xml'
+    android_xml = arlinux_wsi_protocols.get_variable('pkgdatadir') / 'wayland-android.xml'
     srcs += client_header.process(android_xml)
     srcs += code.process(android_xml)
 endif
