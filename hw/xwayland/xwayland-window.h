@@ -118,6 +118,7 @@ struct xwl_window {
     struct xwl_tawc_buffer *tawc_queue_head;
     struct xwl_tawc_buffer *tawc_queue_tail;
     int tawc_queue_len;
+    XID tawc_presenter_window;
 };
 
 struct xwl_window *xwl_window_get(WindowPtr window);

@@ -18,6 +18,9 @@
 #include "extinit.h"
 #include "scrnintstr.h"
 #include "windowstr.h"
+#include "pixmapstr.h"
+#include "resource.h"
+#include "xace.h"
 #include <string.h>
 
 #include "xwayland-glx-stub.h"
@@ -89,6 +92,8 @@
 #define GLX_PBUFFER_BIT      0x00000004
 #define GLX_WIDTH            0x801D
 #define GLX_HEIGHT           0x801E
+#define GLX_PBUFFER_WIDTH    0x8041
+#define GLX_PBUFFER_HEIGHT   0x8040
 #define GLX_SCREEN           0x800C
 #define GLX_Y_INVERTED_EXT   0x20B4
 #define GLX_SAMPLE_BUFFERS  100000
@@ -98,6 +103,29 @@
 #define GLX_STUB_ERRORS 13
 
 Bool noGlxStubExtension = FALSE;
+static RESTYPE pbuffer_type;
+
+/* RT_PIXMAP owns the pixels; this second resource only identifies GLX pbuffers.
+ * Both resources are freed on destruction or client disconnect. */
+static int
+delete_pbuffer_marker(void *value, XID id)
+{
+    (void)value;
+    (void)id;
+    return Success;
+}
+
+typedef struct {
+    CARD8 reqType, glxCode;
+    CARD16 length;
+    CARD32 screen, fbconfig, pbuffer, numAttribs;
+} xGLXCreatePbufferReq;
+
+typedef struct {
+    CARD8 reqType, glxCode;
+    CARD16 length;
+    CARD32 pbuffer;
+} xGLXDestroyPbufferReq;
 
 static const char k_vendor[] = "Mesa Project and SGI";
 static const char k_version[] = "1.4";
@@ -500,24 +528,95 @@ ProcGLXMakeCurrent(ClientPtr client)
 }
 
 static int
+ProcGLXCreatePbuffer(ClientPtr client)
+{
+    REQUEST(xGLXCreatePbufferReq);
+    REQUEST_AT_LEAST_SIZE(xGLXCreatePbufferReq);
+    if (client->swapped) {
+        swapl(&stuff->screen);
+        swapl(&stuff->fbconfig);
+        swapl(&stuff->pbuffer);
+        swapl(&stuff->numAttribs);
+    }
+    if (stuff->numAttribs > (client->req_len * 4 - sizeof(*stuff)) / 8)
+        return BadLength;
+    REQUEST_FIXED_SIZE(xGLXCreatePbufferReq, stuff->numAttribs * 8);
+    if (stuff->screen >= screenInfo.numScreens)
+        return BadValue;
+    if (stuff->fbconfig != root_visual())
+        return BadValue;
+    LEGAL_NEW_RESOURCE(stuff->pbuffer, client);
+    CARD32 width = 0, height = 0;
+    CARD32 *attrs = (CARD32 *)(stuff + 1);
+    for (CARD32 i = 0; i < stuff->numAttribs; i++) {
+        CARD32 key = attrs[2 * i], value = attrs[2 * i + 1];
+        if (client->swapped) { swapl(&key); swapl(&value); }
+        if (key == GLX_PBUFFER_WIDTH) width = value;
+        if (key == GLX_PBUFFER_HEIGHT) height = value;
+    }
+    if (!width || !height || width > 32767 || height > 32767)
+        return BadValue;
+    ScreenPtr screen = screenInfo.screens[stuff->screen];
+    PixmapPtr pixmap = screen->CreatePixmap(screen, width, height,
+                                           screen->rootDepth, 0);
+    if (!pixmap)
+        return BadAlloc;
+    int error = XaceHook(XACE_RESOURCE_ACCESS, client, stuff->pbuffer, RT_PIXMAP,
+                        pixmap, RT_NONE, NULL, DixCreateAccess);
+    if (error != Success) {
+        screen->DestroyPixmap(pixmap);
+        return error;
+    }
+    pixmap->drawable.id = stuff->pbuffer;
+    if (!AddResource(stuff->pbuffer, RT_PIXMAP, pixmap))
+        return BadAlloc;
+    if (!AddResource(stuff->pbuffer, pbuffer_type, pixmap)) {
+        FreeResource(stuff->pbuffer, RT_NONE);
+        return BadAlloc;
+    }
+    return Success;
+}
+
+static int
+ProcGLXDestroyPbuffer(ClientPtr client)
+{
+    REQUEST(xGLXDestroyPbufferReq);
+    REQUEST_SIZE_MATCH(xGLXDestroyPbufferReq);
+    if (client->swapped) swapl(&stuff->pbuffer);
+    void *marker;
+    int error = dixLookupResourceByType(&marker, stuff->pbuffer, pbuffer_type,
+                                        client, DixDestroyAccess);
+    if (error != Success) return error;
+    FreeResource(stuff->pbuffer, RT_NONE);
+    return Success;
+}
+
+static int
 ProcGLXGetDrawableAttributes(ClientPtr client)
 {
     xGLXGetDrawableAttributesReply reply;
     CARD32 attribs[16];
-    WindowPtr pWin = NULL;
+    DrawablePtr drawable = NULL;
+    void *marker;
+    CARD32 drawable_type = GLX_WINDOW_BIT;
     CARD32 num = 0;
     CARD32 w = 1, h = 1, screen = 0;
 
     REQUEST(xGLXGetDrawableAttributesReq);
     REQUEST_AT_LEAST_SIZE(xGLXGetDrawableAttributesReq);
 
-    if (dixLookupWindow(&pWin, stuff->drawable, client, DixGetAttrAccess)
-            == Success && pWin) {
-        w = pWin->drawable.width;
-        h = pWin->drawable.height;
-        if (pWin->drawable.pScreen)
-            screen = (CARD32)pWin->drawable.pScreen->myNum;
+    if (client->swapped) swapl(&stuff->drawable);
+    if (dixLookupDrawable(&drawable, stuff->drawable, client, M_ANY, DixGetAttrAccess)
+            == Success && drawable) {
+        w = drawable->width;
+        h = drawable->height;
+        screen = (CARD32)drawable->pScreen->myNum;
+        if (drawable->type == DRAWABLE_PIXMAP)
+            drawable_type = GLX_PIXMAP_BIT;
     }
+    if (dixLookupResourceByType(&marker, stuff->drawable, pbuffer_type,
+                               client, DixGetAttrAccess) == Success)
+        drawable_type = GLX_PBUFFER_BIT;
 
 #define ATTRIB(a, v) do { \
     attribs[num * 2] = (a); \
@@ -528,7 +627,7 @@ ProcGLXGetDrawableAttributes(ClientPtr client)
     ATTRIB(GLX_WIDTH, w);
     ATTRIB(GLX_HEIGHT, h);
     ATTRIB(GLX_SCREEN, screen);
-    ATTRIB(GLX_DRAWABLE_TYPE, GLX_WINDOW_BIT);
+    ATTRIB(GLX_DRAWABLE_TYPE, drawable_type);
     ATTRIB(GLX_FBCONFIG_ID, root_visual());
 #undef ATTRIB
 
@@ -573,6 +672,10 @@ ProcGLXDispatch(ClientPtr client)
         return ProcGLXMakeCurrent(client);
     case X_GLXGetDrawableAttributes:
         return ProcGLXGetDrawableAttributes(client);
+    case X_GLXCreatePbuffer:
+        return ProcGLXCreatePbuffer(client);
+    case X_GLXDestroyPbuffer:
+        return ProcGLXDestroyPbuffer(client);
     case X_GLXClientInfo:
     case X_GLXSetClientInfoARB:
     case X_GLXSetClientInfo2ARB:
@@ -582,8 +685,6 @@ ProcGLXDispatch(ClientPtr client)
     case X_GLXDestroyContext:
     case X_GLXCreateWindow:
     case X_GLXDestroyWindow:
-    case X_GLXCreatePbuffer:
-    case X_GLXDestroyPbuffer:
     case X_GLXChangeDrawableAttributes:
     case X_GLXSwapBuffers:
     case X_GLXRender:
@@ -606,6 +707,8 @@ SProcGLXDispatch(ClientPtr client)
 void
 xwlGlxStubInit(void)
 {
+    pbuffer_type = CreateNewResourceType(delete_pbuffer_marker, "GLX pbuffer");
+    if (!pbuffer_type) return;
     AddExtension(GLX_EXTENSION_NAME,
                  GLX_STUB_EVENTS, GLX_STUB_ERRORS,
                  ProcGLXDispatch, SProcGLXDispatch,

@@ -62,6 +62,17 @@ static RESTYPE tawc_dri_event_type;  /* eid resources */
 static RESTYPE tawc_dri_window_type; /* per-window cleanup marker */
 static int tawc_dri_request;         /* major opcode, for XGE events */
 
+Bool
+tawc_dri_has_presenter(XID window)
+{
+    tawc_dri_event_rec *event;
+    for (event = tawc_dri_event_list; event; event = event->next)
+        if (event->window->drawable.id == window &&
+            (event->mask & TAWCDRIBufferReleaseMask))
+            return TRUE;
+    return FALSE;
+}
+
 static int
 tawc_dri_free_event(void *data, XID id)
 {

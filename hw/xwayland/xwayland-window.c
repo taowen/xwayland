@@ -2020,6 +2020,19 @@ xwl_window_post_damage(struct xwl_window *xwl_window)
 {
     assert(!xwl_window->frame_callback);
 
+    /* A native presenter owns the surface contents, not the stale X backing
+     * pixmap. Resize/Expose damage must not overwrite its AHB with SHM.
+     * The existing release-event resource tracks the native window lifetime;
+     * removing it restores ordinary X rendering without a new protocol. */
+    extern Bool tawc_dri_has_presenter(XID window);
+    if (xwl_window->tawc_presenter_window) {
+        if (tawc_dri_has_presenter(xwl_window->tawc_presenter_window)) {
+            DamageEmpty(window_get_damage(xwl_window->surface_window));
+            return;
+        }
+        xwl_tawc_window_teardown(xwl_window);
+    }
+
     if (!xwl_window_attach_buffer(xwl_window))
         return;
 

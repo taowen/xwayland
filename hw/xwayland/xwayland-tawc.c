@@ -81,6 +81,7 @@ void
 xwl_tawc_window_teardown(struct xwl_window *window)
 {
     struct xwl_tawc_buffer *buffer;
+    window->tawc_presenter_window = None;
     if (window->tawc_frame_callback) {
         wl_callback_destroy(window->tawc_frame_callback);
         window->tawc_frame_callback = NULL;
@@ -102,6 +103,15 @@ xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
         num_fds <= 0 || num_ints < 0 || usage > UINT32_MAX)
         goto done;
     struct xwl_screen *screen = xwl_screen_get(window->drawable.pScreen);
+    /* An unmapped X window has no Wayland surface yet. Nothing consumes this
+     * frame, so return its buffer immediately instead of losing the client's
+     * swapchain. Mapping generates Expose and subsequent frames use the normal
+     * compositor release path. */
+    if (!window->realized && screen->tawc_wlegl) {
+        tawc_dri_send_buffer_release(window->drawable.id, client_mask, serial);
+        result = Success;
+        goto done;
+    }
     struct xwl_window *xwl = xwl_window_from_window(window);
     if (!screen->tawc_wlegl || !xwl || !xwl->surface) goto done;
     /* Never silently drop a FIFO entry or invent a release timeout. */
@@ -131,6 +141,7 @@ xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
     buffer->client_mask = client_mask;
     buffer->serial = serial;
     wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
+    xwl->tawc_presenter_window = window->drawable.id;
     if (xwl->tawc_frame_callback) {
         if (xwl->tawc_queue_tail) xwl->tawc_queue_tail->queue_next = buffer;
         else xwl->tawc_queue_head = buffer;
