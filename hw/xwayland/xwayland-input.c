@@ -1166,6 +1166,10 @@ keyboard_handle_keymap(void *data, struct wl_keyboard *keyboard,
         return;
     }
 
+    /* Interpret queued keys with the map that accompanied them, before a
+     * virtual keyboard replaces it or restores the physical keyboard map. */
+    mieqProcessInputEvents();
+
     if (xwl_seat->keymap)
         munmap(xwl_seat->keymap, xwl_seat->keymap_size);
 

@@ -33,6 +33,9 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#ifdef __ANDROID__
+#include <unistd.h>
+#endif
 #include <X11/X.h>
 #include <X11/Xos.h>
 #include <X11/Xproto.h>
@@ -117,6 +120,23 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
     char *xkbbasedirflag = NULL;
     const char *xkbbindir = emptystring;
     const char *xkbbindirsep = emptystring;
+    const char *compiler_name = "xkbcomp";
+    const char *compiler_directory = XkbBinDirectory;
+#ifdef __ANDROID__
+    /* APK native executables share a directory and require lib*.so names. */
+    char native_directory[PATH_MAX];
+    ssize_t length = readlink("/proc/self/exe", native_directory,
+                             sizeof(native_directory) - 1);
+    if (length < 0 || (size_t) length >= sizeof(native_directory) - 1)
+        return NULL;
+    native_directory[length] = '\0';
+    char *separator = strrchr(native_directory, '/');
+    if (!separator)
+        return NULL;
+    *separator = '\0';
+    compiler_directory = native_directory;
+    compiler_name = "libxkbcomp.so";
+#endif
 
 #ifdef WIN32
     /* WIN32 has no popen. The input must be stored in a file which is
@@ -142,11 +162,11 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
             xkbbasedirflag = NULL;
     }
 
-    if (XkbBinDirectory != NULL) {
-        int ld = strlen(XkbBinDirectory);
+    if (compiler_directory != NULL) {
+        int ld = strlen(compiler_directory);
         int lps = strlen(PATHSEPARATOR);
 
-        xkbbindir = XkbBinDirectory;
+        xkbbindir = compiler_directory;
 
         if ((ld >= lps) && (strcmp(xkbbindir + ld - lps, PATHSEPARATOR) != 0)) {
             xkbbindirsep = PATHSEPARATOR;
@@ -154,9 +174,9 @@ RunXkbComp(xkbcomp_buffer_callback callback, void *userdata)
     }
 
     if (asprintf(&buf,
-                 "\"%s%sxkbcomp\" -w %d %s -xkm \"%s\" "
+                 "\"%s%s%s\" -w %d %s -xkm \"%s\" "
                  "-em1 %s -emp %s -eml %s \"%s%s.xkm\"",
-                 xkbbindir, xkbbindirsep,
+                 xkbbindir, xkbbindirsep, compiler_name,
                  ((xkbDebugFlags < 2) ? 1 :
                   ((xkbDebugFlags > 10) ? 10 : (int) xkbDebugFlags)),
                  xkbbasedirflag ? xkbbasedirflag : "", xkmfile,
