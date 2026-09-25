@@ -225,15 +225,17 @@ typedef struct {
 
 typedef struct {
     BYTE type;
-    BOOL isDirect;
+    CARD8 unused;
     CARD16 sequenceNumber;
     CARD32 length;
-    CARD32 pad1;
-    CARD32 pad2;
+    BOOL isDirect;
+    CARD8 pad1;
+    CARD16 pad2;
     CARD32 pad3;
     CARD32 pad4;
     CARD32 pad5;
     CARD32 pad6;
+    CARD32 pad7;
 } xGLXIsDirectReply;
 
 typedef struct {
@@ -275,6 +277,30 @@ root_visual(void)
     if (screenInfo.numScreens < 1 || !screenInfo.screens[0])
         return 0;
     return screenInfo.screens[0]->rootVisual;
+}
+
+static int
+visual_depth(VisualID id)
+{
+    ScreenPtr screen = screenInfo.screens[0];
+    for (int i = 0; i < screen->numVisuals; i++)
+        if (screen->visuals[i].vid == id)
+            return screen->visuals[i].nplanes;
+    return 0;
+}
+
+static int
+glx_visuals(VisualID ids[2])
+{
+    ScreenPtr screen = screenInfo.screens[0];
+    int n = 0;
+    for (int depth = 24; depth <= 32; depth += 8)
+        for (int i = 0; i < screen->numVisuals; i++)
+            if (screen->visuals[i].class == TrueColor && screen->visuals[i].nplanes == depth) {
+                ids[n++] = screen->visuals[i].vid;
+                break;
+            }
+    return n;
 }
 
 static int
@@ -320,14 +346,14 @@ fill_visual_props(CARD32 *p, VisualID vis)
     p[3] = 8;
     p[4] = 8;
     p[5] = 8;
-    p[6] = 8;
+    p[6] = visual_depth(vis) == 32 ? 8 : 0;
     p[7] = 0;
     p[8] = 0;
     p[9] = 0;
     p[10] = 0;
     p[11] = 1; /* double buffer */
     p[12] = 0; /* stereo */
-    p[13] = 32;
+    p[13] = visual_depth(vis);
     p[14] = 24;
     p[15] = 8;
     p[16] = 0;
@@ -343,7 +369,7 @@ fill_fbconfig_pairs(CARD32 *p, VisualID vis)
     } attrs[] = {
         { GLX_FBCONFIG_ID, vis },
         { GLX_VISUAL_ID, vis },
-        { GLX_BUFFER_SIZE, 32 },
+        { GLX_BUFFER_SIZE, visual_depth(vis) },
         { GLX_LEVEL, 0 },
         { GLX_DOUBLEBUFFER, 1 },
         { GLX_STEREO, 0 },
@@ -351,7 +377,7 @@ fill_fbconfig_pairs(CARD32 *p, VisualID vis)
         { GLX_RED_SIZE, 8 },
         { GLX_GREEN_SIZE, 8 },
         { GLX_BLUE_SIZE, 8 },
-        { GLX_ALPHA_SIZE, 8 },
+        { GLX_ALPHA_SIZE, visual_depth(vis) == 32 ? 8 : 0 },
         { GLX_DEPTH_SIZE, 24 },
         { GLX_STENCIL_SIZE, 8 },
         { GLX_ACCUM_RED_SIZE, 0 },
@@ -427,19 +453,20 @@ static int
 ProcGLXGetVisualConfigs(ClientPtr client)
 {
     xGLXGetVisualConfigsReply reply;
-    CARD32 props[18];
-    VisualID vis = root_visual();
+    CARD32 props[36];
+    VisualID visuals[2];
+    int count = glx_visuals(visuals);
 
     REQUEST(xGLXGetVisualConfigsReq);
     REQUEST_SIZE_MATCH(xGLXGetVisualConfigsReq);
     (void)stuff;
 
-    fill_visual_props(props, vis);
+    for (int i = 0; i < count; i++) fill_visual_props(props + 18 * i, visuals[i]);
     reply = (xGLXGetVisualConfigsReply) {
         .type = X_Reply,
         .sequenceNumber = client->sequence,
-        .length = 18,
-        .numVisuals = 1,
+        .length = 18 * count,
+        .numVisuals = count,
         .numProps = 18,
     };
     if (client->swapped) {
@@ -447,11 +474,11 @@ ProcGLXGetVisualConfigs(ClientPtr client)
         swapl(&reply.length);
         swapl(&reply.numVisuals);
         swapl(&reply.numProps);
-        for (int i = 0; i < 18; i++)
+        for (int i = 0; i < 18 * count; i++)
             swapl(&props[i]);
     }
     WriteToClient(client, 32, &reply);
-    WriteToClient(client, sizeof(props), props);
+    WriteToClient(client, 18 * count * sizeof(CARD32), props);
     return Success;
 }
 
@@ -459,19 +486,21 @@ static int
 ProcGLXGetFBConfigs(ClientPtr client)
 {
     xGLXGetFBConfigsReply reply;
-    CARD32 pairs[FBCONFIG_NATTRIBS * 2];
-    VisualID vis = root_visual();
+    CARD32 pairs[FBCONFIG_NATTRIBS * 4];
+    VisualID visuals[2];
+    int count = glx_visuals(visuals);
 
     REQUEST(xGLXGetFBConfigsReq);
     REQUEST_SIZE_MATCH(xGLXGetFBConfigsReq);
     (void)stuff;
 
-    fill_fbconfig_pairs(pairs, vis);
+    for (int i = 0; i < count; i++)
+        fill_fbconfig_pairs(pairs + FBCONFIG_NATTRIBS * 2 * i, visuals[i]);
     reply = (xGLXGetFBConfigsReply) {
         .type = X_Reply,
         .sequenceNumber = client->sequence,
-        .length = FBCONFIG_NATTRIBS * 2,
-        .numFBConfigs = 1,
+        .length = FBCONFIG_NATTRIBS * 2 * count,
+        .numFBConfigs = count,
         .numAttribs = FBCONFIG_NATTRIBS,
     };
     if (client->swapped) {
@@ -479,11 +508,11 @@ ProcGLXGetFBConfigs(ClientPtr client)
         swapl(&reply.length);
         swapl(&reply.numFBConfigs);
         swapl(&reply.numAttribs);
-        for (int i = 0; i < FBCONFIG_NATTRIBS * 2; i++)
+        for (int i = 0; i < FBCONFIG_NATTRIBS * 2 * count; i++)
             swapl(&pairs[i]);
     }
     WriteToClient(client, 32, &reply);
-    WriteToClient(client, sizeof(pairs), pairs);
+    WriteToClient(client, FBCONFIG_NATTRIBS * 2 * count * sizeof(CARD32), pairs);
     return Success;
 }
 
@@ -543,7 +572,8 @@ ProcGLXCreatePbuffer(ClientPtr client)
     REQUEST_FIXED_SIZE(xGLXCreatePbufferReq, stuff->numAttribs * 8);
     if (stuff->screen >= screenInfo.numScreens)
         return BadValue;
-    if (stuff->fbconfig != root_visual())
+    int depth = visual_depth(stuff->fbconfig);
+    if (depth != 24 && depth != 32)
         return BadValue;
     LEGAL_NEW_RESOURCE(stuff->pbuffer, client);
     CARD32 width = 0, height = 0;
@@ -558,7 +588,7 @@ ProcGLXCreatePbuffer(ClientPtr client)
         return BadValue;
     ScreenPtr screen = screenInfo.screens[stuff->screen];
     PixmapPtr pixmap = screen->CreatePixmap(screen, width, height,
-                                           screen->rootDepth, 0);
+                                           depth, 0);
     if (!pixmap)
         return BadAlloc;
     int error = XaceHook(XACE_RESOURCE_ACCESS, client, stuff->pbuffer, RT_PIXMAP,
@@ -601,6 +631,7 @@ ProcGLXGetDrawableAttributes(ClientPtr client)
     CARD32 drawable_type = GLX_WINDOW_BIT;
     CARD32 num = 0;
     CARD32 w = 1, h = 1, screen = 0;
+    VisualID visual = root_visual();
 
     REQUEST(xGLXGetDrawableAttributesReq);
     REQUEST_AT_LEAST_SIZE(xGLXGetDrawableAttributesReq);
@@ -611,6 +642,10 @@ ProcGLXGetDrawableAttributes(ClientPtr client)
         w = drawable->width;
         h = drawable->height;
         screen = (CARD32)drawable->pScreen->myNum;
+        VisualID ids[2];
+        int count = glx_visuals(ids);
+        for (int i = 0; i < count; i++)
+            if (visual_depth(ids[i]) == drawable->depth) visual = ids[i];
         if (drawable->type == DRAWABLE_PIXMAP)
             drawable_type = GLX_PIXMAP_BIT;
     }
@@ -628,7 +663,7 @@ ProcGLXGetDrawableAttributes(ClientPtr client)
     ATTRIB(GLX_HEIGHT, h);
     ATTRIB(GLX_SCREEN, screen);
     ATTRIB(GLX_DRAWABLE_TYPE, drawable_type);
-    ATTRIB(GLX_FBCONFIG_ID, root_visual());
+    ATTRIB(GLX_FBCONFIG_ID, visual);
 #undef ATTRIB
 
     reply = (xGLXGetDrawableAttributesReply) {

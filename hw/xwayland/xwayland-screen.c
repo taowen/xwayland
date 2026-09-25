@@ -1020,10 +1020,8 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
     xorg_list_init(&xwl_screen->queued_drm_lease_devices);
     xorg_list_init(&xwl_screen->drm_leases);
     xorg_list_init(&xwl_screen->pending_wl_surface_destroy);
-    /* Same screen model as BionicX PixmapManager: one displayable
-     * 32-bit TrueColor visual. Depth 24 is a pixmap format on the
-     * same 32-bit buffer, not a second TrueColor visual. */
-    xwl_screen->depth = 32;
+    /* Opaque RGB windows use depth 24; Render adds the ARGB visual. */
+    xwl_screen->depth = 24;
     xwl_screen->global_surface_scale = 1;
 
     if (!monitorResolution)
@@ -1068,7 +1066,7 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
         return FALSE;
     }
 
-    miSetVisualTypesAndMasks(32, (1 << TrueColor), 8, TrueColor,
+    miSetVisualTypesAndMasks(24, (1 << TrueColor), 8, TrueColor,
                              0xff0000, 0x00ff00, 0x0000ff);
     miSetPixmapDepths();
 
