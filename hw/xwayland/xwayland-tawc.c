@@ -29,6 +29,7 @@ struct xwl_tawc_surface {
     struct wl_subsurface *subsurface;
     struct wp_viewport *viewport;
     struct wl_callback *frame;
+    OsTimerPtr frame_timer;
     struct xwl_tawc_buffer *head, *tail;
     int queued, width, height;
     Bool root_surface;
@@ -88,6 +89,7 @@ static Bool geometry(struct xwl_tawc_surface *surface)
 
 static void frame_done(void *, struct wl_callback *, uint32_t);
 static const struct wl_callback_listener frame_listener = { .done = frame_done };
+static CARD32 frame_timeout(OsTimerPtr, CARD32, void *);
 
 static void commit(struct xwl_tawc_surface *surface, struct xwl_tawc_buffer *buffer)
 {
@@ -102,6 +104,10 @@ static void commit(struct xwl_tawc_surface *surface, struct xwl_tawc_buffer *buf
     wl_surface_damage(surface->surface, 0, 0, buffer->width, buffer->height);
     surface->frame = wl_surface_frame(surface->surface);
     wl_callback_add_listener(surface->frame, &frame_listener, surface);
+    /* Like Xwayland Present's TIMER_LEN_FLIP: compositors may withhold frame
+     * callbacks for invisible surfaces. Keep those clients making progress at
+     * 1 fps, without ever releasing a buffer still owned by the compositor. */
+    surface->frame_timer = TimerSet(surface->frame_timer, 0, 1000, frame_timeout, surface);
     wl_surface_commit(surface->surface);
     /* Subsurface position and stacking are parent-commit synchronized. */
     if (!surface->root_surface) wl_surface_commit(surface->owner->surface);
@@ -113,13 +119,27 @@ static void frame_done(void *data, struct wl_callback *callback, uint32_t time)
     (void)time;
     wl_callback_destroy(callback);
     surface->frame = NULL;
+    TimerCancel(surface->frame_timer);
     struct xwl_tawc_buffer *buffer;
     while (!surface->frame && (buffer = pop(surface))) commit(surface, buffer);
+}
+
+static CARD32 frame_timeout(OsTimerPtr timer, CARD32 now, void *data)
+{
+    struct xwl_tawc_surface *surface = data;
+    (void)timer;
+    (void)now;
+    if (surface->frame) wl_callback_destroy(surface->frame);
+    surface->frame = NULL;
+    struct xwl_tawc_buffer *buffer;
+    while (!surface->frame && (buffer = pop(surface))) commit(surface, buffer);
+    return surface->frame ? 1000 : 0;
 }
 
 static void surface_destroy(struct xwl_tawc_surface *surface)
 {
     struct xwl_tawc_buffer *buffer;
+    if (surface->frame_timer) TimerFree(surface->frame_timer);
     if (surface->frame) wl_callback_destroy(surface->frame);
     while ((buffer = pop(surface))) buffer_release(buffer, buffer->buffer);
     if (surface->viewport) wp_viewport_destroy(surface->viewport);
