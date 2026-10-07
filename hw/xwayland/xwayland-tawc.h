@@ -18,4 +18,7 @@ int xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
     const int32_t *ints, int num_ints, int width, int height, int stride,
     int format, uint64_t usage, uint32_t client_mask, uint32_t serial, uint32_t flags);
 void xwl_tawc_window_teardown(struct xwl_window *window);
+void xwl_tawc_window_changed(struct xwl_window *window);
+void xwl_tawc_unrealize(WindowPtr window);
+Bool xwl_tawc_owns_surface(struct xwl_window *window);
 #endif

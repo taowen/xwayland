@@ -109,16 +109,8 @@ struct xwl_window {
     int fractional_scale_numerator;
     struct wp_linux_drm_syncobj_surface_v1 *surface_sync;
 
-    /* TAWC-DRI frame pacing (hw/xwayland/xwayland-tawc.c): commits are
-     * throttled to the compositor's wl_surface.frame cadence. While a
-     * callback is outstanding, presents queue FIFO here; one is
-     * committed per callback. All NULL/0 unless the window receives
-     * TAWC-DRI presents; torn down in xwl_window_dispose. */
-    struct wl_callback *tawc_frame_callback;
-    struct xwl_tawc_buffer *tawc_queue_head;
-    struct xwl_tawc_buffer *tawc_queue_tail;
-    int tawc_queue_len;
-    XID tawc_presenter_window;
+    /* Each native X drawable has its own surface and frame/release queue. */
+    struct xwl_tawc_surface *tawc_surfaces;
 };
 
 struct xwl_window *xwl_window_get(WindowPtr window);

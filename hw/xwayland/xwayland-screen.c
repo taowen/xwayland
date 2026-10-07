@@ -528,6 +528,9 @@ registry_global(void *data, struct wl_registry *registry, uint32_t id,
             xwl_screen_add_drm_lease_device(xwl_screen, id);
         }
     }
+    else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
+        xwl_screen->subcompositor = wl_registry_bind(registry, id, &wl_subcompositor_interface, 1);
+    }
     else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
         xwl_screen->viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
     }

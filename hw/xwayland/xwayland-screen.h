@@ -103,6 +103,7 @@ struct xwl_screen {
     struct wl_registry *registry;
     struct wl_registry *input_registry;
     struct wl_compositor *compositor;
+    struct wl_subcompositor *subcompositor;
     struct zwp_tablet_manager_v2 *tablet_manager;
     struct wl_shm *shm;
     struct xdg_wm_base *xdg_wm_base;
