@@ -331,7 +331,11 @@ glamor_build_program(ScreenPtr          screen,
                  str(prim->fs_extensions),
                  str(fill->fs_extensions),
                  gpu_shader4 ? "#extension GL_EXT_gpu_shader4 : require\n#define texelFetch texelFetch2D\n#define uint unsigned int\n" : "",
-                 GLAMOR_COMPAT_DEFINES_FS,
+                 /* Declare only the outputs used by this blend mode. Extra
+                  * outputs require locations in GLSL ES even when unwritten. */
+                 prog->alpha == glamor_program_alpha_dual_blend ?
+                     GLAMOR_COMPAT_DEFINES_FS "out vec4 color0;\nout vec4 color1;\n" :
+                     GLAMOR_COMPAT_DEFINES_FS,
                  str(defines),
                  str(prim->fs_vars),
                  str(fill->fs_vars),
