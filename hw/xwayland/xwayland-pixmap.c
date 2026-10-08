@@ -40,6 +40,9 @@
 #include "xwayland-pixmap.h"
 #include "xwayland-screen.h"
 #include "xwayland-shm.h"
+#ifdef TAWC
+#include "xwayland-tawc.h"
+#endif
 #include "xwayland-window-buffers.h"
 
 static DevPrivateKeyRec xwl_pixmap_private_key;
@@ -65,6 +68,9 @@ xwl_pixmap_get(PixmapPtr pixmap)
 struct wl_buffer *
 xwl_pixmap_get_wl_buffer(PixmapPtr pixmap)
 {
+#ifdef TAWC
+    return xwl_tawc_pixmap_get_wl_buffer(pixmap);
+#endif
 #ifdef XWL_HAS_GLAMOR
     struct xwl_screen *xwl_screen = xwl_screen_get(pixmap->drawable.pScreen);
 

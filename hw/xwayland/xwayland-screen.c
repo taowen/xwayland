@@ -528,9 +528,6 @@ registry_global(void *data, struct wl_registry *registry, uint32_t id,
             xwl_screen_add_drm_lease_device(xwl_screen, id);
         }
     }
-    else if (strcmp(interface, wl_subcompositor_interface.name) == 0) {
-        xwl_screen->subcompositor = wl_registry_bind(registry, id, &wl_subcompositor_interface, 1);
-    }
     else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
         xwl_screen->viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
     }
@@ -1123,6 +1120,11 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
     }
 #endif
 
+#ifdef TAWC
+    if (!xwl_tawc_init(xwl_screen))
+        return FALSE;
+#endif
+
     xwl_screen->present = xwl_present_init(pScreen);
 
     if (!xwl_screen->glamor) {
@@ -1182,5 +1184,8 @@ xwl_screen_init(ScreenPtr pScreen, int argc, char **argv)
 
     xwl_screen_roundtrip(xwl_screen);
 
+#ifdef TAWC
+    xwl_tawc_wrap_close(pScreen);
+#endif
     return ret;
 }

@@ -130,6 +130,11 @@ if build_xwayland_glamor
 endif
 
 if build_tawc
+    if not build_glamor or build_xwayland_glamor
+        error('TAWC requires Glamor with the Android AHB backend, not GBM')
+    endif
+    xwayland_glamor += glamor
+    xwayland_dep += cc.find_library('android')
     srcs += [
         'xwayland-tawc.c',
         'xwayland-tawc.h',

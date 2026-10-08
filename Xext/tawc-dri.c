@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
- * TAWC-DRI 0.4: forward native handles from X11 clients to android_wlegl.
- * The compositor imports buffers and signals release. XGE events report
+ * TAWC-DRI 0.4: import native client buffers into the X11 rendering backend.
+ * The backend imports buffers and signals release. XGE events report
  * resize and release to each client's selected XCB event queue.
  */
 
@@ -61,17 +61,6 @@ static tawc_dri_event_rec *tawc_dri_event_list;
 static RESTYPE tawc_dri_event_type;  /* eid resources */
 static RESTYPE tawc_dri_window_type; /* per-window cleanup marker */
 static int tawc_dri_request;         /* major opcode, for XGE events */
-
-Bool
-tawc_dri_has_presenter(XID window)
-{
-    tawc_dri_event_rec *event;
-    for (event = tawc_dri_event_list; event; event = event->next)
-        if (event->window->drawable.id == window &&
-            (event->mask & TAWCDRIBufferReleaseMask))
-            return TRUE;
-    return FALSE;
-}
 
 static int
 tawc_dri_free_event(void *data, XID id)
@@ -165,9 +154,8 @@ tawc_dri_config_notify(WindowPtr window,
     return ret;
 }
 
-/* Compositor released a wl_buffer created by a v0.3 PresentBuffer.
- * Called from hw/xwayland/xwayland-tawc.c's wl_buffer.release
- * listener. Serials are per-presenting-client, so the release goes
+/* The backend finished reading a PresentBuffer allocation.
+ * Serials are per-presenting-client, so the release goes
  * only to that client's selection — matched by clientAsMask + window
  * XID rather than pointers: if the client or window is gone, its
  * selections were freed with it and nothing is sent; recycled
@@ -352,7 +340,7 @@ ProcTAWCDRIPresentBuffer(ClientPtr client)
                                         (uint32_t)client->clientAsMask,
                                         serial, flags);
     /* xwl_tawc_present_native_handle owns + closes the fds on both
-     * success (duplicated by Wayland) and failure (closed during cleanup). */
+     * success (cloned by gralloc) and failure (closed during cleanup). */
     free(fds);
     free(ints_buf);
     return rc;

@@ -718,13 +718,15 @@ glamor_init(ScreenPtr screen, unsigned int flags)
             goto fail;
         }
 
-        if (!epoxy_has_gl_extension("GL_OES_texture_border_clamp")) {
-            ErrorF("GL_OES_texture_border_clamp required\n");
+        if (gl_version < 32 &&
+            !epoxy_has_gl_extension("GL_OES_texture_border_clamp") &&
+            !epoxy_has_gl_extension("GL_EXT_texture_border_clamp")) {
+            ErrorF("GLES 3.2 or texture_border_clamp required\n");
             goto fail;
         }
     }
 
-    if (!epoxy_has_gl_extension("GL_ARB_vertex_array_object") &&
+    if (gl_version < 30 && !epoxy_has_gl_extension("GL_ARB_vertex_array_object") &&
         !epoxy_has_gl_extension("GL_OES_vertex_array_object")) {
         ErrorF("GL_{ARB,OES}_vertex_array_object required\n");
         goto fail;

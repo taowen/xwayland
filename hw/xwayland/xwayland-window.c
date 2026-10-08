@@ -49,7 +49,6 @@
 #include "xwayland-shm.h"
 #include "xwayland-dmabuf.h"
 #ifdef TAWC
-#include "xwayland-tawc.h"
 #endif
 
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
@@ -1701,7 +1700,6 @@ xwl_window_dispose(struct xwl_window *xwl_window)
         wp_linux_drm_syncobj_surface_v1_destroy(xwl_window->surface_sync);
 
 #ifdef TAWC
-    xwl_tawc_window_teardown(xwl_window);
 #endif
     release_wl_surface_for_window(xwl_window);
     xorg_list_del(&xwl_window->link_damage);
@@ -1731,7 +1729,6 @@ xwl_unrealize_window(WindowPtr window)
     struct xwl_window *xwl_window = xwl_window_get(window);
     Bool ret;
 
-    xwl_tawc_unrealize(window);
 
     if (xwl_window) {
         unregister_damage(xwl_window);
@@ -1814,7 +1811,6 @@ xwl_clip_notify(WindowPtr window, int dx, int dy)
 
     if (xwl_window) {
         xwl_window_update_surface_window(xwl_window);
-        xwl_tawc_window_changed(xwl_window);
     }
 }
 
@@ -1955,7 +1951,6 @@ xwl_destroy_window(WindowPtr window)
     struct xwl_window *xwl_window = xwl_window_get(window);
     Bool ret;
 
-    xwl_tawc_unrealize(window);
 
     if (xwl_screen->present)
         xwl_present_cleanup(window);
@@ -2025,15 +2020,6 @@ void
 xwl_window_post_damage(struct xwl_window *xwl_window)
 {
     assert(!xwl_window->frame_callback);
-
-    /* Native child surfaces compose above the ordinary X backing pixmap.
-     * Updating software content must never replace a child's AHB. */
-    xwl_tawc_window_changed(xwl_window);
-
-    if (xwl_tawc_owns_surface(xwl_window)) {
-        DamageEmpty(window_get_damage(xwl_window->surface_window));
-        return;
-    }
 
     if (!xwl_window_attach_buffer(xwl_window))
         return;

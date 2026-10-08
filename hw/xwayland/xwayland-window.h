@@ -43,7 +43,6 @@
 #include "xwayland-types.h"
 #include "xwayland-dmabuf.h"
 
-struct xwl_tawc_buffer;
 
 struct xwl_wl_surface {
     OsTimerPtr wl_surface_destroy_timer;
@@ -109,8 +108,6 @@ struct xwl_window {
     int fractional_scale_numerator;
     struct wp_linux_drm_syncobj_surface_v1 *surface_sync;
 
-    /* Each native X drawable has its own surface and frame/release queue. */
-    struct xwl_tawc_surface *tawc_surfaces;
 };
 
 struct xwl_window *xwl_window_get(WindowPtr window);

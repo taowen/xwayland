@@ -1,259 +1,245 @@
 /* SPDX-License-Identifier: MIT
- * TAWC-DRI forwards native buffers without importing or reading back pixels.
- * Each X drawable has its own Wayland subsurface, lifetime and FIFO queue.
+ * Android storage backend for upstream Glamor. X11 windows, including native
+ * client drawables, share the ordinary X backing pixmap and clip machinery.
+ * Only complete Xwayland window buffers cross the Wayland connection.
  */
-#ifdef HAVE_DIX_CONFIG_H
-#include <dix-config.h>
-#endif
+#include <xwayland-config.h>
+#include <android/hardware_buffer.h>
+#include <dlfcn.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
-#include <wayland-client.h>
-#include <X11/X.h>
+#include <epoxy/gl.h>
+#include <epoxy/egl.h>
+#include <glamor.h>
+#include <glamor_context.h>
 #include <arlinux/tawc-dri.h>
 #include "windowstr.h"
+#include "gcstruct.h"
 #include "xwayland-screen.h"
-#include "xwayland-window.h"
+#include "xwayland-pixmap.h"
 #include "xwayland-tawc.h"
 #include "wayland-android-client-protocol.h"
-#include "viewporter-client-protocol.h"
 
-#define TAWC_MAX_QUEUED 8
-extern void tawc_dri_send_buffer_release(uint32_t, uint32_t, uint32_t);
-extern Bool tawc_dri_has_presenter(XID);
-
-struct xwl_tawc_surface {
-    struct xwl_tawc_surface *next;
-    struct xwl_window *owner;
-    WindowPtr window;
-    struct wl_surface *surface;
-    struct wl_subsurface *subsurface;
-    struct wp_viewport *viewport;
-    struct wl_callback *frame;
-    OsTimerPtr frame_timer;
-    struct xwl_tawc_buffer *head, *tail;
-    int queued, width, height;
-    Bool root_surface;
+/* gralloc's native_handle_t ABI; import clones the supplied descriptors. */
+struct native_handle { int version, num_fds, num_ints; int data[]; };
+static int (*import_handle)(const AHardwareBuffer_Desc *, const struct native_handle *, int32_t, AHardwareBuffer **);
+static const struct native_handle *(*export_handle)(const AHardwareBuffer *);
+static DevPrivateKeyRec ahb_key;
+static DevPrivateKeyRec screen_key;
+struct ahb_screen { CloseScreenProcPtr close; };
+struct ahb_pixmap {
+    AHardwareBuffer *allocation;
+    EGLImageKHR image;
+    struct wl_buffer *buffer;
 };
+extern void tawc_dri_send_buffer_release(uint32_t, uint32_t, uint32_t);
 
-static void buffer_destroy(struct xwl_tawc_buffer *buffer)
+static void make_current(struct glamor_context *ctx)
 {
-    if (buffer->buffer) wl_buffer_destroy(buffer->buffer);
-    if (buffer->opaque_region) wl_region_destroy(buffer->opaque_region);
-    free(buffer);
+    if (!eglMakeCurrent(ctx->display, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx->ctx))
+        FatalError("Xwayland: Android EGL context lost\n");
 }
 
-static void buffer_release(void *data, struct wl_buffer *wl_buffer)
+void glamor_egl_screen_init(ScreenPtr screen, struct glamor_context *ctx)
 {
-    struct xwl_tawc_buffer *buffer = data;
-    (void)wl_buffer;
-    tawc_dri_send_buffer_release(buffer->window_id, buffer->client_mask, buffer->serial);
-    buffer_destroy(buffer);
-}
-static const struct wl_buffer_listener buffer_listener = { .release = buffer_release };
-
-static struct xwl_tawc_buffer *pop(struct xwl_tawc_surface *surface)
-{
-    struct xwl_tawc_buffer *buffer = surface->head;
-    if (!buffer) return NULL;
-    surface->head = buffer->queue_next;
-    if (!surface->head) surface->tail = NULL;
-    surface->queued--;
-    buffer->queue_next = NULL;
-    return buffer;
+    struct xwl_screen *xwl = xwl_screen_get(screen);
+    ctx->display = xwl->egl_display;
+    ctx->ctx = xwl->egl_context;
+    ctx->make_current = make_current;
+    xwl->glamor_ctx = ctx;
 }
 
-/* Ancestors clip a drawable; siblings are handled by compositor stacking. */
-static Bool geometry(struct xwl_tawc_surface *surface)
+/* This backend deliberately does not advertise the DRM/DRI3 export API. */
+int glamor_egl_fd_name_from_pixmap(ScreenPtr screen, PixmapPtr pixmap,
+                                 CARD16 *stride, CARD32 *size) { return -1; }
+
+static Bool destroy_pixmap(PixmapPtr pixmap)
 {
-    if (surface->root_surface) return TRUE;
-    WindowPtr window = surface->window;
-    WindowPtr root = surface->owner->surface_window;
-    int x1 = window->drawable.x, y1 = window->drawable.y;
-    int x2 = x1 + min(surface->width, window->drawable.width);
-    int y2 = y1 + min(surface->height, window->drawable.height);
-    for (WindowPtr p = window; p; p = p->parent) {
-        x1 = max(x1, p->drawable.x);
-        y1 = max(y1, p->drawable.y);
-        x2 = min(x2, p->drawable.x + p->drawable.width);
-        y2 = min(y2, p->drawable.y + p->drawable.height);
-        if (p == surface->owner->toplevel) break;
+    struct ahb_pixmap *ahb = dixLookupPrivate(&pixmap->devPrivates, &ahb_key);
+    if (pixmap->refcnt != 1 || !ahb)
+        return glamor_destroy_pixmap(pixmap);
+    EGLDisplay egl_display = xwl_screen_get(pixmap->drawable.pScreen)->egl_display;
+    xwl_pixmap_del_buffer_release_cb(pixmap);
+    if (ahb->buffer) wl_buffer_destroy(ahb->buffer);
+    /* Glamor owns the texture; drop it before the EGLImage/allocation. */
+    Bool result = glamor_destroy_pixmap(pixmap);
+    eglDestroyImageKHR(egl_display, ahb->image);
+    AHardwareBuffer_release(ahb->allocation);
+    free(ahb);
+    return result;
+}
+
+/* On success the pixmap takes ownership of allocation. */
+static PixmapPtr import_pixmap(ScreenPtr screen, AHardwareBuffer *allocation,
+                              int width, int height, int depth, Bool opaque)
+{
+    struct xwl_screen *xwl = xwl_screen_get(screen);
+    struct ahb_pixmap *ahb = calloc(1, sizeof(*ahb));
+    if (!ahb) return NULL;
+    make_current(xwl->glamor_ctx);
+    EGLint attributes[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
+    ahb->image = eglCreateImageKHR(xwl->egl_display, EGL_NO_CONTEXT,
+        EGL_NATIVE_BUFFER_ANDROID, eglGetNativeClientBufferANDROID(allocation), attributes);
+    if (ahb->image == EGL_NO_IMAGE_KHR) {
+        ErrorF("Xwayland: AHB image import failed (EGL %#x)\n", eglGetError());
+        goto fail;
     }
-    if (x2 <= x1 || y2 <= y1) return FALSE;
-    wl_subsurface_set_position(surface->subsurface, x1 - root->drawable.x, y1 - root->drawable.y);
-    wp_viewport_set_source(surface->viewport,
-        wl_fixed_from_int(x1 - window->drawable.x), wl_fixed_from_int(y1 - window->drawable.y),
-        wl_fixed_from_int(x2 - x1), wl_fixed_from_int(y2 - y1));
-    wp_viewport_set_destination(surface->viewport, x2 - x1, y2 - y1);
+    PixmapPtr pixmap = glamor_create_pixmap(screen, width, height, depth,
+                                          GLAMOR_CREATE_PIXMAP_NO_TEXTURE);
+    if (!pixmap) goto fail_image;
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (opaque) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ONE);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, ahb->image);
+    if (!glamor_set_pixmap_texture(pixmap, texture)) {
+        glamor_destroy_pixmap(pixmap);
+        goto fail_image;
+    }
+    glamor_set_pixmap_type(pixmap, GLAMOR_TEXTURE_DRM);
+    ahb->allocation = allocation;
+    dixSetPrivate(&pixmap->devPrivates, &ahb_key, ahb);
+    return pixmap;
+fail_image:
+    eglDestroyImageKHR(xwl->egl_display, ahb->image);
+fail:
+    free(ahb);
+    return NULL;
+}
+
+static PixmapPtr create_pixmap(ScreenPtr screen, int width, int height,
+                              int depth, unsigned int hint)
+{
+    if (!width || !height || (depth != 24 && depth != 32) ||
+        hint == CREATE_PIXMAP_USAGE_GLYPH_PICTURE)
+        return glamor_create_pixmap(screen, width, height, depth, hint);
+    AHardwareBuffer_Desc desc = {
+        .width = width, .height = height, .layers = 1,
+        .format = depth == 24 ? AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM :
+                               AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM,
+        .usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
+    };
+    AHardwareBuffer *allocation = NULL;
+    if (AHardwareBuffer_allocate(&desc, &allocation)) return NULL;
+    PixmapPtr pixmap = import_pixmap(screen, allocation, width, height, depth, FALSE);
+    if (!pixmap) AHardwareBuffer_release(allocation);
+    return pixmap;
+}
+
+static Bool create_screen_resources(ScreenPtr screen)
+{
+    struct xwl_screen *xwl = xwl_screen_get(screen);
+    screen->CreateScreenResources = xwl->CreateScreenResources;
+    Bool result = screen->CreateScreenResources(screen);
+    xwl->CreateScreenResources = screen->CreateScreenResources;
+    screen->CreateScreenResources = create_screen_resources;
+    if (!result) return FALSE;
+    screen->devPrivate = create_pixmap(screen, xwl->rootless ? 0 : xwl->width,
+        xwl->rootless ? 0 : xwl->height, screen->rootDepth, CREATE_PIXMAP_USAGE_BACKING_PIXMAP);
+    SetRootClip(screen, xwl->root_clip_mode);
+    return screen->devPrivate != NULL;
+}
+
+static Bool close_screen(ScreenPtr screen)
+{
+    struct xwl_screen *xwl = xwl_screen_get(screen);
+    struct ahb_screen *state = dixLookupPrivate(&screen->devPrivates, &screen_key);
+    EGLDisplay egl_display = xwl->egl_display;
+    EGLContext context = xwl->egl_context;
+    PixmapPtr root = screen->GetScreenPixmap(screen);
+    struct ahb_pixmap *ahb = dixLookupPrivate(&root->devPrivates, &ahb_key);
+    /* Glamor restores fbDestroyPixmap before freeing the root pixmap. Keep
+     * its Android storage alive until Glamor has destroyed the GL texture. */
+    dixSetPrivate(&root->devPrivates, &ahb_key, NULL);
+    if (ahb && ahb->buffer) {
+        xwl_pixmap_del_buffer_release_cb(root);
+        wl_buffer_destroy(ahb->buffer);
+    }
+    screen->CloseScreen = state->close;
+    Bool result = screen->CloseScreen(screen);
+    if (ahb) {
+        eglDestroyImageKHR(egl_display, ahb->image);
+        AHardwareBuffer_release(ahb->allocation);
+        free(ahb);
+    }
+    eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroyContext(egl_display, context);
+    eglTerminate(egl_display);
+    return result;
+}
+
+void xwl_tawc_wrap_close(ScreenPtr screen)
+{
+    struct ahb_screen *state = dixLookupPrivate(&screen->devPrivates, &screen_key);
+    state->close = screen->CloseScreen;
+    screen->CloseScreen = close_screen;
+}
+
+Bool xwl_tawc_init(struct xwl_screen *xwl)
+{
+    static void *native;
+    if (!native) native = dlopen("libnativewindow.so", RTLD_NOW | RTLD_LOCAL);
+    if (!native) return FALSE;
+    import_handle = dlsym(native, "AHardwareBuffer_createFromHandle");
+    export_handle = dlsym(native, "AHardwareBuffer_getNativeHandle");
+    if (!import_handle || !export_handle || !xwl->tawc_wlegl) return FALSE;
+    xwl->egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (!eglInitialize(xwl->egl_display, NULL, NULL) ||
+        !epoxy_has_egl_extension(xwl->egl_display, "EGL_KHR_surfaceless_context") ||
+        !epoxy_has_egl_extension(xwl->egl_display, "EGL_ANDROID_get_native_client_buffer"))
+        return FALSE;
+    EGLConfig config;
+    EGLint count;
+    EGLint attributes[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE };
+    EGLint context[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+    if (!eglChooseConfig(xwl->egl_display, attributes, &config, 1, &count) || !count ||
+        !eglBindAPI(EGL_OPENGL_ES_API)) return FALSE;
+    xwl->egl_context = eglCreateContext(xwl->egl_display, config, EGL_NO_CONTEXT, context);
+    if (xwl->egl_context == EGL_NO_CONTEXT) return FALSE;
+    if (!dixRegisterPrivateKey(&ahb_key, PRIVATE_PIXMAP, 0) ||
+        !dixRegisterPrivateKey(&screen_key, PRIVATE_SCREEN, sizeof(struct ahb_screen)) ||
+        !glamor_init(xwl->screen, GLAMOR_USE_EGL_SCREEN)) return FALSE;
+    xwl->glamor = XWL_GLAMOR_GLES;
+    xwl->screen->CreatePixmap = create_pixmap;
+    xwl->screen->DestroyPixmap = destroy_pixmap;
+    xwl->CreateScreenResources = xwl->screen->CreateScreenResources;
+    xwl->screen->CreateScreenResources = create_screen_resources;
+    ErrorF("Xwayland: Glamor/AHB renderer: %s\n", glGetString(GL_RENDERER));
     return TRUE;
 }
 
-static void frame_done(void *, struct wl_callback *, uint32_t);
-static const struct wl_callback_listener frame_listener = { .done = frame_done };
-static CARD32 frame_timeout(OsTimerPtr, CARD32, void *);
-
-static void commit(struct xwl_tawc_surface *surface, struct xwl_tawc_buffer *buffer)
+struct wl_buffer *xwl_tawc_pixmap_get_wl_buffer(PixmapPtr pixmap)
 {
-    surface->width = buffer->width;
-    surface->height = buffer->height;
-    if (!geometry(surface)) {
-        buffer_release(buffer, buffer->buffer);
-        return;
-    }
-    wl_surface_set_opaque_region(surface->surface, buffer->opaque_region);
-    wl_surface_attach(surface->surface, buffer->buffer, 0, 0);
-    wl_surface_damage(surface->surface, 0, 0, buffer->width, buffer->height);
-    surface->frame = wl_surface_frame(surface->surface);
-    wl_callback_add_listener(surface->frame, &frame_listener, surface);
-    /* Like Xwayland Present's TIMER_LEN_FLIP: compositors may withhold frame
-     * callbacks for invisible surfaces. Keep those clients making progress at
-     * 1 fps, without ever releasing a buffer still owned by the compositor. */
-    surface->frame_timer = TimerSet(surface->frame_timer, 0, 1000, frame_timeout, surface);
-    wl_surface_commit(surface->surface);
-    /* Subsurface position and stacking are parent-commit synchronized. */
-    if (!surface->root_surface) wl_surface_commit(surface->owner->surface);
-}
-
-static void frame_done(void *data, struct wl_callback *callback, uint32_t time)
-{
-    struct xwl_tawc_surface *surface = data;
-    (void)time;
-    wl_callback_destroy(callback);
-    surface->frame = NULL;
-    TimerCancel(surface->frame_timer);
-    struct xwl_tawc_buffer *buffer;
-    while (!surface->frame && (buffer = pop(surface))) commit(surface, buffer);
-}
-
-static CARD32 frame_timeout(OsTimerPtr timer, CARD32 now, void *data)
-{
-    struct xwl_tawc_surface *surface = data;
-    (void)timer;
-    (void)now;
-    if (surface->frame) wl_callback_destroy(surface->frame);
-    surface->frame = NULL;
-    struct xwl_tawc_buffer *buffer;
-    while (!surface->frame && (buffer = pop(surface))) commit(surface, buffer);
-    return surface->frame ? 1000 : 0;
-}
-
-static void surface_destroy(struct xwl_tawc_surface *surface)
-{
-    struct xwl_tawc_buffer *buffer;
-    if (surface->frame_timer) TimerFree(surface->frame_timer);
-    if (surface->frame) wl_callback_destroy(surface->frame);
-    while ((buffer = pop(surface))) buffer_release(buffer, buffer->buffer);
-    if (surface->viewport) wp_viewport_destroy(surface->viewport);
-    if (surface->subsurface) wl_subsurface_destroy(surface->subsurface);
-    if (surface->surface && !surface->root_surface) wl_surface_destroy(surface->surface);
-    /* Committed buffers are released by the compositor, never early here. */
-    free(surface);
-}
-
-void xwl_tawc_window_teardown(struct xwl_window *window)
-{
-    while (window->tawc_surfaces) {
-        struct xwl_tawc_surface *surface = window->tawc_surfaces;
-        window->tawc_surfaces = surface->next;
-        surface_destroy(surface);
-    }
-}
-
-void xwl_tawc_unrealize(WindowPtr window)
-{
-    struct xwl_window *owner = xwl_window_from_window(window);
-    if (!owner) return;
-    struct xwl_tawc_surface **link = &owner->tawc_surfaces;
-    while (*link) {
-        struct xwl_tawc_surface *surface = *link;
-        WindowPtr p = surface->window;
-        while (p && p != window) p = p->parent;
-        if (p) {
-            *link = surface->next;
-            surface_destroy(surface);
-        } else link = &surface->next;
-    }
-}
-
-/* Walk X siblings bottom-to-top, with children above their parent. */
-static void restack(struct xwl_window *owner, WindowPtr window, struct wl_surface **below)
-{
-    for (struct xwl_tawc_surface *s = owner->tawc_surfaces; s; s = s->next) {
-        if (s->window != window || s->root_surface) continue;
-        wl_subsurface_place_above(s->subsurface, *below);
-        *below = s->surface;
-    }
-    for (WindowPtr child = window->lastChild; child; child = child->prevSib)
-        restack(owner, child, below);
-}
-
-void xwl_tawc_window_changed(struct xwl_window *owner)
-{
-    if (!owner->tawc_surfaces) return;
-    struct xwl_tawc_surface **link = &owner->tawc_surfaces;
-    while (*link) {
-        struct xwl_tawc_surface *s = *link;
-        if (!s->window->realized || !tawc_dri_has_presenter(s->window->drawable.id) ||
-            (s->width && !geometry(s))) {
-            *link = s->next;
-            surface_destroy(s);
-            continue;
-        }
-        if (s->width && geometry(s)) wl_surface_commit(s->surface);
-        link = &s->next;
-    }
-    struct wl_surface *below = owner->surface;
-    restack(owner, owner->toplevel, &below);
-    wl_surface_commit(owner->surface);
-}
-
-Bool xwl_tawc_owns_surface(struct xwl_window *owner)
-{
-    for (struct xwl_tawc_surface *s = owner->tawc_surfaces; s; s = s->next)
-        if (s->root_surface) return TRUE;
-    return FALSE;
-}
-
-static struct xwl_tawc_surface *get_surface(struct xwl_screen *screen, struct xwl_window *owner, WindowPtr window)
-{
-    for (struct xwl_tawc_surface *s = owner->tawc_surfaces; s; s = s->next)
-        if (s->window == window) return s;
-    struct xwl_tawc_surface *s = calloc(1, sizeof(*s));
-    if (!s) return NULL;
-    s->owner = owner;
-    s->window = window;
-    WindowPtr root = owner->surface_window;
-    /* Preserve the top-level buffer's alpha semantics. A full-window native
-     * presenter replaces its X backing pixmap; other drawables are children,
-     * never a competing attachment to that top-level surface. */
-    if (!xwl_tawc_owns_surface(owner) &&
-        window->drawable.x == root->drawable.x && window->drawable.y == root->drawable.y &&
-        window->drawable.width == root->drawable.width && window->drawable.height == root->drawable.height) {
-        s->root_surface = TRUE;
-        s->surface = owner->surface;
-        s->next = owner->tawc_surfaces;
-        owner->tawc_surfaces = s;
-        return s;
-    }
-    s->surface = wl_compositor_create_surface(screen->compositor);
-    if (!s->surface) goto fail;
-    s->subsurface = wl_subcompositor_get_subsurface(screen->subcompositor, s->surface, owner->surface);
-    if (!s->subsurface) goto fail;
-    s->viewport = wp_viewporter_get_viewport(screen->viewporter, s->surface);
-    if (!s->viewport) goto fail;
-    wl_subsurface_set_desync(s->subsurface);
-    /* The top-level X surface remains the sole input target. */
-    struct wl_region *empty = wl_compositor_create_region(screen->compositor);
-    if (!empty) goto fail;
-    wl_surface_set_input_region(s->surface, empty);
-    wl_region_destroy(empty);
-    s->next = owner->tawc_surfaces;
-    owner->tawc_surfaces = s;
-    struct wl_surface *below = owner->surface;
-    restack(owner, owner->toplevel, &below);
-    return s;
-fail:
-    surface_destroy(s);
-    return NULL;
+    struct ahb_pixmap *ahb = dixLookupPrivate(&pixmap->devPrivates, &ahb_key);
+    if (!ahb) return NULL;
+    struct xwl_screen *xwl = xwl_screen_get(pixmap->drawable.pScreen);
+    make_current(xwl->glamor_ctx);
+    /* android_wlegl has no acquire fence. Finish GPU writes before handing off;
+     * this synchronizes GPU work, it does not map or read pixels on the CPU. */
+    glFinish();
+    if (ahb->buffer) return ahb->buffer;
+    AHardwareBuffer_Desc desc;
+    AHardwareBuffer_describe(ahb->allocation, &desc);
+    const struct native_handle *native = export_handle(ahb->allocation);
+    if (!native) return NULL;
+    struct wl_array ints = { .size = native->num_ints * sizeof(int),
+        .data = (void *)(native->data + native->num_fds) };
+    struct android_wlegl_handle *handle = android_wlegl_create_handle(xwl->tawc_wlegl, native->num_fds, &ints);
+    if (!handle) return NULL;
+    for (int i = 0; i < native->num_fds; i++)
+        android_wlegl_handle_add_fd(handle, native->data[i]);
+    ahb->buffer = android_wlegl_create_buffer(xwl->tawc_wlegl, desc.width, desc.height,
+        desc.stride, desc.format, desc.usage, handle);
+    android_wlegl_handle_destroy(handle);
+    static const struct wl_buffer_listener listener = { xwl_pixmap_buffer_release_cb };
+    if (ahb->buffer) wl_buffer_add_listener(ahb->buffer, &listener, pixmap);
+    return ahb->buffer;
 }
 
 int xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
@@ -261,52 +247,43 @@ int xwl_tawc_present_native_handle(WindowPtr window, int *fds, int num_fds,
     int format, uint64_t usage, uint32_t client_mask, uint32_t serial, uint32_t flags)
 {
     int result = BadMatch;
-    struct xwl_tawc_buffer *buffer = NULL;
     if (!window || width <= 0 || height <= 0 || stride < width ||
-        num_fds <= 0 || num_ints < 0 || usage > UINT32_MAX) goto done;
-    struct xwl_screen *screen = xwl_screen_get(window->drawable.pScreen);
-    if (!window->realized && screen->tawc_wlegl) {
-        tawc_dri_send_buffer_release(window->drawable.id, client_mask, serial);
-        result = Success;
+        num_fds <= 0 || num_fds > 64 || num_ints < 0 || num_ints > 1024) goto done;
+    if (!window->realized) { result = Success; goto done; }
+    ScreenPtr screen = window->drawable.pScreen;
+    struct native_handle *handle = malloc(sizeof(*handle) + (num_fds + num_ints) * sizeof(int));
+    if (!handle) { result = BadAlloc; goto done; }
+    *handle = (struct native_handle){ sizeof(*handle), num_fds, num_ints };
+    memcpy(handle->data, fds, num_fds * sizeof(int));
+    memcpy(handle->data + num_fds, ints, num_ints * sizeof(int));
+    AHardwareBuffer_Desc desc = { .width = width, .height = height, .stride = stride,
+        .layers = 1, .format = format, .usage = usage };
+    AHardwareBuffer *allocation = NULL;
+    int status = import_handle(&desc, handle, 3 /* CLONE */, &allocation);
+    free(handle);
+    if (status) {
+        ErrorF("Xwayland: AHB handle import failed (%d, %dx%d format=%d usage=%llu)\n",
+            status, width, height, format, (unsigned long long)usage);
         goto done;
     }
-    struct xwl_window *owner = xwl_window_from_window(window);
-    if (!screen->tawc_wlegl || !screen->subcompositor || !screen->viewporter ||
-        !owner || !owner->surface) goto done;
-    result = BadAlloc;
-    struct xwl_tawc_surface *surface = get_surface(screen, owner, window);
-    if (!surface || surface->queued >= TAWC_MAX_QUEUED) goto done;
-    buffer = calloc(1, sizeof(*buffer));
-    if (!buffer) goto done;
-    if (flags & TAWC_DRI_PRESENT_OPAQUE) {
-        buffer->opaque_region = wl_compositor_create_region(screen->compositor);
-        if (!buffer->opaque_region) goto done;
-        wl_region_add(buffer->opaque_region, 0, 0, width, height);
-    }
-    struct wl_array values = { .size = (size_t)num_ints * sizeof(int32_t), .data = (void *)ints };
-    struct android_wlegl_handle *handle = android_wlegl_create_handle(screen->tawc_wlegl, num_fds, &values);
-    if (!handle) goto done;
-    for (int i = 0; i < num_fds; i++) android_wlegl_handle_add_fd(handle, fds[i]);
-    buffer->buffer = android_wlegl_create_buffer(screen->tawc_wlegl,
-        width, height, stride, format, (uint32_t)usage, handle);
-    android_wlegl_handle_destroy(handle);
-    if (!buffer->buffer) goto done;
-    buffer->width = width;
-    buffer->height = height;
-    buffer->window_id = window->drawable.id;
-    buffer->client_mask = client_mask;
-    buffer->serial = serial;
-    wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
-    if (surface->frame) {
-        if (surface->tail) surface->tail->queue_next = buffer;
-        else surface->head = buffer;
-        surface->tail = buffer;
-        surface->queued++;
-    } else commit(surface, buffer);
-    buffer = NULL;
+    PixmapPtr source = import_pixmap(screen, allocation, width, height, window->drawable.depth,
+                                   flags & TAWC_DRI_PRESENT_OPAQUE);
+    if (!source) { AHardwareBuffer_release(allocation); goto done; }
+    GCPtr gc = GetScratchGC(window->drawable.depth, screen);
+    if (!gc) { result = BadAlloc; destroy_pixmap(source); goto done; }
+    /* ValidateGC computes the X11 hierarchy/shape/sibling clip. Glamor executes
+     * this copy on the GPU and the normal Damage/Present path submits it. */
+    ValidateGC(&window->drawable, gc);
+    RegionPtr exposed = gc->ops->CopyArea(&source->drawable, &window->drawable, gc,
+        0, 0, min(width, window->drawable.width), min(height, window->drawable.height), 0, 0);
+    if (exposed) RegionDestroy(exposed);
+    FreeScratchGC(gc);
+    glFinish(); /* Client may reuse its allocation after BufferRelease. */
+    destroy_pixmap(source);
     result = Success;
 done:
-    if (buffer) buffer_destroy(buffer);
     for (int i = 0; i < num_fds; i++) if (fds[i] >= 0) close(fds[i]);
+    if (result == Success)
+        tawc_dri_send_buffer_release(window->drawable.id, client_mask, serial);
     return result;
 }
