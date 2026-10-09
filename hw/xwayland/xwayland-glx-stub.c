@@ -59,6 +59,7 @@
 #define GLX_VENDOR      1
 #define GLX_VERSION     2
 #define GLX_EXTENSIONS  3
+#define GLX_VENDOR_NAMES_EXT 0x20F6
 
 #define GLX_USE_GL                1
 #define GLX_BUFFER_SIZE           2
@@ -132,7 +133,7 @@ static const char k_version[] = "1.4";
 static const char k_extensions[] =
     "GLX_ARB_create_context GLX_ARB_create_context_profile "
     "GLX_ARB_create_context_no_error GLX_ARB_fbconfig_float "
-    "GLX_EXT_create_context_es2_profile GLX_EXT_fbconfig_packed_float "
+    "GLX_EXT_create_context_es2_profile GLX_EXT_fbconfig_packed_float GLX_EXT_libglvnd "
     "GLX_MESA_query_renderer GLX_SGIX_fbconfig GLX_SGIX_pbuffer";
 
 typedef struct {
@@ -432,11 +433,21 @@ ProcGLXQueryServerString(ClientPtr client)
 
     REQUEST(xGLXQueryServerStringReq);
     REQUEST_SIZE_MATCH(xGLXQueryServerStringReq);
+    if (client->swapped) {
+        swapl(&stuff->screen);
+        swapl(&stuff->name);
+    }
+    if (stuff->screen >= screenInfo.numScreens)
+        return BadValue;
 
     if (stuff->name == GLX_VENDOR)
         str = k_vendor;
     else if (stuff->name == GLX_VERSION)
         str = k_version;
+    else if (stuff->name == GLX_VENDOR_NAMES_EXT)
+        str = "mesa";
+    else if (stuff->name != GLX_EXTENSIONS)
+        return BadValue;
     return write_string_reply(client, str);
 }
 
