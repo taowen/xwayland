@@ -492,7 +492,14 @@ glamor_add_format(ScreenPtr screen, int depth, CARD32 render_format,
         glDeleteTextures(1, &tex);
         glDeleteFramebuffers(1, &fbo);
 
-        if (!texture_only && (format != read_format || type != read_type)) {
+        Bool converted_readback = FALSE;
+#ifdef __ANDROID__
+        /* Android AHB storage is RGBA. The transfer path converts RGBA
+         * readback into X11 BGRA; it does not require the optional BGRA read
+         * pair advertised by the driver (some Adreno drivers report type 0). */
+        converted_readback = format == GL_BGRA && type == GL_UNSIGNED_BYTE;
+#endif
+        if (!texture_only && !converted_readback && (format != read_format || type != read_type)) {
             ErrorF("glamor: Implementation returned 0x%x/0x%x read format/type "
                    "for depth %d, expected 0x%x/0x%x.  "
                    "Falling back to software.\n",

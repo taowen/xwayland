@@ -218,6 +218,28 @@ glamor_download_boxes(DrawablePtr drawable, BoxPtr in_boxes, int in_nbox,
             if (x2 <= x1 || y2 <= y1)
                 continue;
 
+#ifdef __ANDROID__
+            /* GLES guarantees RGBA/UNSIGNED_BYTE readback for RGBA8 storage.
+             * Keep the CPU conversion confined to explicit X11 readback;
+             * window presentation continues to share the AHB directly. */
+            if (f->format == GL_BGRA && f->type == GL_UNSIGNED_BYTE) {
+                if (glamor_priv->has_pack_subimage)
+                    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+                uint32_t *rgba = xnfalloc((size_t) (x2 - x1) * (y2 - y1) * 4);
+                glReadPixels(x1 - box->x1, y1 - box->y1, x2 - x1, y2 - y1,
+                             GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+                for (int row = 0; row < y2 - y1; row++) {
+                    uint32_t *dst = (uint32_t *) (bits + ofs + row * byte_stride);
+                    for (int col = 0; col < x2 - x1; col++)
+                        dst[col] = glamor_swap_red_blue(rgba[row * (x2 - x1) + col]);
+                }
+                free(rgba);
+                if (glamor_priv->has_pack_subimage)
+                    glPixelStorei(GL_PACK_ROW_LENGTH, byte_stride / bytes_per_pixel);
+                continue;
+            }
+#endif
+
             if (glamor_priv->has_pack_subimage ||
                 x2 - x1 == byte_stride / bytes_per_pixel) {
                 glReadPixels(x1 - box->x1, y1 - box->y1, x2 - x1, y2 - y1, f->format, f->type, bits + ofs);
