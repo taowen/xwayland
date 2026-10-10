@@ -23,6 +23,34 @@
 #include "glamor_priv.h"
 #include "glamor_transfer.h"
 
+#ifdef __ANDROID__
+static uint32_t
+glamor_swap_red_blue(uint32_t pixel)
+{
+    return (pixel & 0xff00ff00) | ((pixel & 0xff) << 16) | ((pixel >> 16) & 0xff);
+}
+
+/* X11 pixels are BGRA, but EGLImage-backed Android buffers have RGBA storage.
+ * Convert only the client's dirty pixels; no AHB mapping or GPU readback. */
+static void
+glamor_upload_ahb(int x, int y, int width, int height, const uint32_t *bits,
+                  uint32_t byte_stride, Bool opaque, Bool unpack_subimage)
+{
+    uint32_t *rgba = xnfalloc((size_t) width * height * sizeof(*rgba));
+    for (int row = 0; row < height; row++) {
+        const uint32_t *src = (const uint32_t *) ((const uint8_t *) bits + row * byte_stride);
+        for (int col = 0; col < width; col++)
+            rgba[(size_t) row * width + col] = glamor_swap_red_blue(src[col]) |
+                                             (opaque ? 0xff000000 : 0);
+    }
+    if (unpack_subimage) glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height,
+                    GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    if (unpack_subimage) glPixelStorei(GL_UNPACK_ROW_LENGTH, byte_stride / 4);
+    free(rgba);
+}
+#endif
+
 /*
  * Write a region of bits into a drawable's backing pixmap
  */
@@ -77,6 +105,17 @@ glamor_upload_boxes(DrawablePtr drawable, BoxPtr in_boxes, int in_nbox,
                 continue;
 
             src_line = (uint32_t *)(bits + ofs);
+
+#ifdef __ANDROID__
+            if (priv->type == GLAMOR_TEXTURE_DRM &&
+                f->format == GL_BGRA && f->type == GL_UNSIGNED_BYTE) {
+                glamor_upload_ahb(x1 - box->x1, y1 - box->y1, x2 - x1, y2 - y1,
+                                  src_line, byte_stride,
+                                  glamor_drawable_effective_depth(drawable) == 24,
+                                  glamor_priv->has_unpack_subimage);
+                continue;
+            }
+#endif
 
             if (tmp_bits) {
                 uint32_t *tmp_line = (uint32_t *)(tmp_bits + ofs);

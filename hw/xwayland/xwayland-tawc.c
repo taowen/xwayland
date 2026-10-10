@@ -5,6 +5,7 @@
  */
 #include <xwayland-config.h>
 #include <android/hardware_buffer.h>
+#include <android/log.h>
 #include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,11 @@ struct ahb_pixmap {
     struct wl_buffer *buffer;
 };
 extern void tawc_dri_send_buffer_release(uint32_t, uint32_t, uint32_t);
+
+static void android_error_log(const char *format, va_list args)
+{
+    __android_log_vprint(ANDROID_LOG_INFO, "Xwayland", format, args);
+}
 
 static void make_current(struct glamor_context *ctx)
 {
@@ -120,8 +126,11 @@ static PixmapPtr create_pixmap(ScreenPtr screen, int width, int height,
         return glamor_create_pixmap(screen, width, height, depth, hint);
     AHardwareBuffer_Desc desc = {
         .width = width, .height = height, .layers = 1,
-        .format = depth == 24 ? AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM :
-                               AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM,
+        /* Glamor uploads depth-24 pixels as RGBA too. RGBX imports can have
+         * RGB internal storage, which GLES rejects for RGBA TexSubImage2D.
+         * Match the upstream GLES GBM backend: use RGBA storage for both
+         * depths; the X drawable depth still controls alpha semantics. */
+        .format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM,
         .usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
     };
     AHardwareBuffer *allocation = NULL;
@@ -182,6 +191,7 @@ void xwl_tawc_wrap_close(ScreenPtr screen)
 
 Bool xwl_tawc_init(struct xwl_screen *xwl)
 {
+    OsVendorVErrorFProc = android_error_log;
     static void *native;
     if (!native) native = dlopen("libnativewindow.so", RTLD_NOW | RTLD_LOCAL);
     if (!native) return FALSE;

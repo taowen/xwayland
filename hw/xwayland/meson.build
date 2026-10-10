@@ -135,6 +135,7 @@ if build_tawc
     endif
     xwayland_glamor += glamor
     xwayland_dep += cc.find_library('android')
+    xwayland_dep += cc.find_library('log')
     srcs += [
         'xwayland-tawc.c',
         'xwayland-tawc.h',
